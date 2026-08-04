@@ -66,20 +66,17 @@ public sealed class RingTexture
 
         long need = pixelCount * 4;
 
-        if (HeaderSize + need > blob.Length)
-        {
-            throw new ArgumentException(
-                $"Texture blob {blob.Length} bytes too small for {w}x{h} RGBA8 data ({HeaderSize + need} bytes needed)");
-        }
-
-        return new RingTexture
-        {
-            Name = AssetTypes.ReadName(blob, 0x10, 16),
-            Width = w,
-            Height = h,
-            Pixels = blob.Slice(HeaderSize, (int)need).ToArray(),
-            HeaderTail = blob[..HeaderSize].ToArray(),
-        };
+        return HeaderSize + need > blob.Length
+            ? throw new ArgumentException(
+                $"Texture blob {blob.Length} bytes too small for {w}x{h} RGBA8 data ({HeaderSize + need} bytes needed)")
+            : new RingTexture
+            {
+                Name = AssetTypes.ReadName(blob, 0x10, 16),
+                Width = w,
+                Height = h,
+                Pixels = blob.Slice(HeaderSize, (int)need).ToArray(),
+                HeaderTail = blob[..HeaderSize].ToArray(),
+            };
     }
 
     /// <summary>

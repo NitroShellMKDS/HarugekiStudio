@@ -1,11 +1,9 @@
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Input;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using Harugeki.Formats;
 using System.Numerics;
-using System.Reflection;
 using System.Runtime.InteropServices;
 using static Avalonia.OpenGL.GlConsts;
 
@@ -38,7 +36,7 @@ public class GlViewport : OpenGlControlBase
         get => GetValue(ModelProperty);
         set
         {
-            SetValue(ModelProperty, value);
+            _ = SetValue(ModelProperty, value);
             _dirty = true;
             RequestNextFrameRendering();
         }
@@ -54,6 +52,11 @@ public class GlViewport : OpenGlControlBase
     {
         _ = ShadingProperty.Changed.AddClassHandler<GlViewport>(
             (v, _) => v.RequestNextFrameRendering());
+        _ = ModelProperty.Changed.AddClassHandler<GlViewport>((v, _) =>
+        {
+            v._dirty = true;
+            v.RequestNextFrameRendering();
+        });
     }
 
     // ---- camera ----------------------------------------------------------
@@ -62,6 +65,7 @@ public class GlViewport : OpenGlControlBase
     private bool _zoomAnimating;
     private Vector3 _target = new(0, 80, 0);
     private bool _dirty = true;
+
 
     // ---- gl objects ------------------------------------------------------
     private int _program, _vao, _vbo, _lineVbo, _white;
@@ -106,7 +110,7 @@ public class GlViewport : OpenGlControlBase
 
     public void Zoom(float delta)
     {
-        _targetDistance = Math.Clamp(_targetDistance * (1f - delta * 0.08f), 1f, 100000f);
+        _targetDistance = Math.Clamp(_targetDistance * (1f - (delta * 0.08f)), 1f, 100000f);
         _zoomAnimating = true;
         RequestNextFrameRendering();
     }

@@ -24,7 +24,6 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private TreeItemViewModel? _selectedItem;
     [ObservableProperty] private RingModel? _viewportModel;
     [ObservableProperty] private string _searchFilter = "";
-    private Bitmap? _texturePreview;
     [ObservableProperty] private string _textureCaption = "";
     [ObservableProperty] private int _selectedPane;
     [ObservableProperty] private ShadingMode _shading = ShadingMode.Textured;
@@ -43,12 +42,16 @@ public partial class MainViewModel : ObservableObject
 
     public Bitmap? TexturePreview
     {
-        get => _texturePreview;
+        get;
         set
         {
-            if (ReferenceEquals(_texturePreview, value)) return;
-            _texturePreview?.Dispose();
-            SetProperty(ref _texturePreview, value);
+            if (ReferenceEquals(field, value))
+            {
+                return;
+            }
+
+            field?.Dispose();
+            _ = SetProperty(ref field, value);
         }
     }
 
@@ -68,7 +71,7 @@ public partial class MainViewModel : ObservableObject
         foreach (TreeItemViewModel item in Roots)
         {
             item.IsExpanded = true;
-            ExpandMatching(item, lower);
+            _ = ExpandMatching(item, lower);
         }
     }
 
@@ -172,10 +175,6 @@ public partial class MainViewModel : ObservableObject
     private void ShowModel(RingModel model)
     {
         ViewportModel = model;
-        if (SelectedPane == 0)
-        {
-            SelectedPane = -1;
-        }
         SelectedPane = 0;
     }
 

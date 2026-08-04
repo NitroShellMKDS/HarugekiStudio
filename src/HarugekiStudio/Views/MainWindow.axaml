@@ -101,14 +101,16 @@
         <TabControl Grid.Row="1" SelectedIndex="{Binding SelectedPane, Mode=TwoWay}"
                     Background="#1A1A1A">
           <TabItem Header="Viewport">
-            <Border Background="Transparent"
-                    PointerPressed="Viewport_OnPointerPressed"
-                    PointerMoved="Viewport_OnPointerMoved"
-                    PointerWheelChanged="Viewport_OnPointerWheel">
+            <Grid>
               <r:GlViewport Name="Viewport"
                             Model="{Binding ViewportModel}"
                             Shading="{Binding Shading}" />
-            </Border>
+              <Canvas Background="Transparent"
+                      PointerPressed="Overlay_OnPointerPressed"
+                      PointerMoved="Overlay_OnPointerMoved"
+                      PointerReleased="Overlay_OnPointerReleased"
+                      PointerWheelChanged="Overlay_OnPointerWheelChanged" />
+            </Grid>
           </TabItem>
           <TabItem Header="Texture">
             <DockPanel Background="#141414">

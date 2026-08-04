@@ -16,8 +16,12 @@ public interface IAppStorageProvider
 internal sealed class WindowStorageProvider(IStorageProvider inner) : IAppStorageProvider
 {
     public Task<IReadOnlyList<IStorageFile>> OpenFilePickerAsync(FilePickerOpenOptions options)
-        => inner.OpenFilePickerAsync(options);
+    {
+        return inner.OpenFilePickerAsync(options);
+    }
 
     public Task<IStorageFile?> SaveFilePickerAsync(FilePickerSaveOptions options)
-        => inner.SaveFilePickerAsync(options);
+    {
+        return inner.SaveFilePickerAsync(options);
+    }
 }

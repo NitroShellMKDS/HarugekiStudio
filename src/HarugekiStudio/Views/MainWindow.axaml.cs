@@ -1,11 +1,10 @@
-using System;
-using System.Collections.Specialized;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Markup.Xaml;
 using HarugekiStudio.Rendering;
 using HarugekiStudio.ViewModels;
+using System.Collections.Specialized;
 
 namespace HarugekiStudio.Views;
 
@@ -30,8 +29,16 @@ public partial class MainWindow : Window
     {
         if (_currentVm is not null)
         {
-            if (_resetViewHandler is not null) _currentVm.ResetViewRequested -= _resetViewHandler;
-            if (_consoleCollectionChangedHandler is not null) _currentVm.Console.CollectionChanged -= _consoleCollectionChangedHandler;
+            if (_resetViewHandler is not null)
+            {
+                _currentVm.ResetViewRequested -= _resetViewHandler;
+            }
+
+            if (_consoleCollectionChangedHandler is not null)
+            {
+                _currentVm.Console.CollectionChanged -= _consoleCollectionChangedHandler;
+            }
+
             _resetViewHandler = null;
             _consoleCollectionChangedHandler = null;
             _currentVm = null;
@@ -58,8 +65,16 @@ public partial class MainWindow : Window
         base.OnClosed(e);
         if (_currentVm is not null)
         {
-            if (_resetViewHandler is not null) _currentVm.ResetViewRequested -= _resetViewHandler;
-            if (_consoleCollectionChangedHandler is not null) _currentVm.Console.CollectionChanged -= _consoleCollectionChangedHandler;
+            if (_resetViewHandler is not null)
+            {
+                _currentVm.ResetViewRequested -= _resetViewHandler;
+            }
+
+            if (_consoleCollectionChangedHandler is not null)
+            {
+                _currentVm.Console.CollectionChanged -= _consoleCollectionChangedHandler;
+            }
+
             _resetViewHandler = null;
             _consoleCollectionChangedHandler = null;
             _currentVm = null;
@@ -71,30 +86,45 @@ public partial class MainWindow : Window
     private bool _dragging, _panning;
     private Point _lastPointer;
 
-    private void Viewport_OnPointerPressed(object? sender, PointerPressedEventArgs e)
+    private GlViewport? Vp => this.FindControl<GlViewport>("Viewport");
+
+    private void Overlay_OnPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        GlViewport? vp = Viewport;
-        if (vp is null) return;
+        GlViewport? vp = Vp;
+        if (vp is null)
+        {
+            return;
+        }
 
         PointerPoint p = e.GetCurrentPoint(vp);
         _dragging = p.Properties.IsLeftButtonPressed && !e.KeyModifiers.HasFlag(KeyModifiers.Shift);
         _panning = p.Properties.IsMiddleButtonPressed ||
                    (p.Properties.IsLeftButtonPressed && e.KeyModifiers.HasFlag(KeyModifiers.Shift));
-        _lastPointer = p.Position;
-        e.Pointer.Capture(sender as IInputElement);
+        if (_dragging || _panning)
+        {
+            _lastPointer = p.Position;
+            e.Pointer.Capture(sender as IInputElement);
+        }
         e.Handled = true;
     }
 
-    private void Viewport_OnPointerMoved(object? sender, PointerEventArgs e)
+    private void Overlay_OnPointerMoved(object? sender, PointerEventArgs e)
     {
-        if (!_dragging && !_panning) return;
+        if (!_dragging && !_panning)
+        {
+            return;
+        }
 
-        GlViewport? vp = Viewport;
-        if (vp is null) return;
+        GlViewport? vp = Vp;
+        if (vp is null)
+        {
+            return;
+        }
 
-        Point p = e.GetPosition(vp);
-        double dx = p.X - _lastPointer.X, dy = p.Y - _lastPointer.Y;
-        _lastPointer = p;
+        Point pos = e.GetPosition(vp);
+        double dx = pos.X - _lastPointer.X;
+        double dy = pos.Y - _lastPointer.Y;
+        _lastPointer = pos;
 
         if (_dragging)
         {
@@ -108,12 +138,18 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
-    private void Viewport_OnPointerWheel(object? sender, PointerWheelEventArgs e)
+    private void Overlay_OnPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
-        GlViewport? vp = Viewport;
-        if (vp is null) return;
-
-        vp.Zoom((float)e.Delta.Y);
+        _dragging = false;
+        _panning = false;
+        e.Pointer.Capture(null);
         e.Handled = true;
     }
+
+    private void Overlay_OnPointerWheelChanged(object? sender, PointerWheelEventArgs e)
+    {
+        Vp?.Zoom((float)e.Delta.Y);
+        e.Handled = true;
+    }
+
 }

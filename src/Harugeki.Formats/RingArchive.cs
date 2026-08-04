@@ -37,18 +37,12 @@ public sealed class RingArchive
     {
         FileInfo fileInfo = new(path);
 
-        if (fileInfo.Length > MaxArchiveSize)
-        {
-            throw new InvalidOperationException(
-                $"Archive file is too large ({fileInfo.Length / 1024 / 1024} MB). Maximum supported: {MaxArchiveSize / 1024 / 1024} MB");
-        }
-
-        if (fileInfo.Length < 8)
-        {
-            throw new InvalidOperationException("Archive file is too small to be valid");
-        }
-
-        return new(File.ReadAllBytes(path), path);
+        return fileInfo.Length > MaxArchiveSize
+            ? throw new InvalidOperationException(
+                $"Archive file is too large ({fileInfo.Length / 1024 / 1024} MB). Maximum supported: {MaxArchiveSize / 1024 / 1024} MB")
+            : fileInfo.Length < 8
+            ? throw new InvalidOperationException("Archive file is too small to be valid")
+            : new(File.ReadAllBytes(path), path);
     }
 
     private readonly Dictionary<int, object> _aliasKeys = [];
