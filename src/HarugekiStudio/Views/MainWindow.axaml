@@ -1,0 +1,169 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:HarugekiStudio.ViewModels"
+        xmlns:r="clr-namespace:HarugekiStudio.Rendering"
+        x:Class="HarugekiStudio.Views.MainWindow"
+        x:DataType="vm:MainViewModel"
+        Title="Harugeki Studio" Width="1280" Height="760"
+        Background="#1E1E1E" FontSize="12">
+
+  <DockPanel>
+    <!-- menu -->
+    <Menu DockPanel.Dock="Top">
+      <MenuItem Header="_File">
+        <MenuItem Header="_Open Archive…" Command="{Binding OpenCommand}" InputGesture="Ctrl+O" />
+        <MenuItem Header="_Save Modified" Command="{Binding SaveCommand}" InputGesture="Ctrl+S" />
+        <Separator />
+        <MenuItem Header="_Export Selected…" Command="{Binding ExportCommand}" InputGesture="Ctrl+E" />
+        <MenuItem Header="_Replace Selected…" Command="{Binding ReplaceCommand}" InputGesture="Ctrl+R" />
+        <Separator />
+        <MenuItem Header="Close _All" Command="{Binding CloseAllCommand}" />
+        <MenuItem Header="E_xit" Command="{Binding ExitCommand}" />
+      </MenuItem>
+      <MenuItem Header="_View">
+        <MenuItem Header="_Reset Camera" Command="{Binding ResetViewCommand}" InputGesture="F" />
+      </MenuItem>
+    </Menu>
+
+    <!-- status bar -->
+    <Border DockPanel.Dock="Bottom" Background="#252526" BorderBrush="#333"
+            BorderThickness="0,1,0,0" Padding="8,3">
+      <TextBlock Text="{Binding Status}" Foreground="#BBB" />
+    </Border>
+
+    <!-- Outliner | viewport | Properties, with min widths so no pane can be
+         dragged away to nothing. -->
+    <Grid>
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="280" MinWidth="180" />
+        <ColumnDefinition Width="4" />
+        <ColumnDefinition Width="*" MinWidth="240" />
+        <ColumnDefinition Width="4" />
+        <ColumnDefinition Width="300" MinWidth="200" />
+      </Grid.ColumnDefinitions>
+
+      <!-- ================= Outliner ================= -->
+      <Border Grid.Column="0" Background="#232323" BorderBrush="#333" BorderThickness="0,0,1,0">
+        <DockPanel>
+          <TextBlock DockPanel.Dock="Top" Text="Outliner" Margin="8,6,8,4"
+                     FontWeight="SemiBold" Foreground="#DDD" />
+          <TextBox DockPanel.Dock="Top" Name="SearchBox" PlaceholderText="Search"
+                   Margin="6,0,6,6" Height="26" FontSize="12" />
+          <TreeView ItemsSource="{Binding Roots}"
+                    SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
+                    Background="Transparent" BorderThickness="0">
+            <TreeView.Styles>
+              <Style Selector="TreeViewItem" x:DataType="vm:TreeItemViewModel">
+                <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+              </Style>
+            </TreeView.Styles>
+            <TreeView.ItemTemplate>
+              <TreeDataTemplate ItemsSource="{Binding Children}" x:DataType="vm:TreeItemViewModel">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <Border Width="8" Height="8" CornerRadius="2" VerticalAlignment="Center"
+                          Background="{Binding Colour}" />
+                  <TextBlock Text="{Binding Header}" Foreground="#EEE" />
+                  <TextBlock Text="{Binding Detail}" Foreground="#777" FontSize="11"
+                             VerticalAlignment="Center" />
+                </StackPanel>
+              </TreeDataTemplate>
+            </TreeView.ItemTemplate>
+          </TreeView>
+        </DockPanel>
+      </Border>
+
+      <GridSplitter Grid.Column="1" Background="#2D2D2D" ResizeDirection="Columns" />
+
+      <!-- ================= centre ================= -->
+      <Grid Grid.Column="2">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="*" MinHeight="120" />
+          <RowDefinition Height="4" />
+          <RowDefinition Height="170" MinHeight="60" />
+        </Grid.RowDefinitions>
+
+        <!-- viewport toolbar -->
+        <Border Grid.Row="0" Background="#2B2B2B" BorderBrush="#333"
+                BorderThickness="0,0,0,1" Padding="6,4">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="Shading:" Foreground="#AAA" VerticalAlignment="Center" />
+            <ComboBox ItemsSource="{Binding ShadingModes}"
+                      SelectedItem="{Binding Shading, Mode=TwoWay}"
+                      MinWidth="110" FontSize="12" />
+            <Button Content="Reset Camera" Command="{Binding ResetViewCommand}" FontSize="12" />
+            <Button Content="Export…" Command="{Binding ExportCommand}" FontSize="12" />
+            <Button Content="Replace…" Command="{Binding ReplaceCommand}" FontSize="12" />
+          </StackPanel>
+        </Border>
+
+        <TabControl Grid.Row="1" SelectedIndex="{Binding SelectedPane, Mode=TwoWay}"
+                    Background="#1A1A1A">
+          <TabItem Header="Viewport">
+            <r:GlViewport Name="Viewport"
+                          Model="{Binding ViewportModel}"
+                          Shading="{Binding Shading}" />
+          </TabItem>
+          <TabItem Header="Texture">
+            <DockPanel Background="#141414">
+              <Border DockPanel.Dock="Top" Background="#222" Padding="8,4">
+                <TextBlock Text="{Binding TextureCaption}" Foreground="#CCC" />
+              </Border>
+              <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                            VerticalScrollBarVisibility="Auto">
+                <Image Source="{Binding TexturePreview}"
+                       Stretch="None" HorizontalAlignment="Center"
+                       VerticalAlignment="Center" Margin="12" />
+              </ScrollViewer>
+            </DockPanel>
+          </TabItem>
+        </TabControl>
+
+        <GridSplitter Grid.Row="2" Background="#2D2D2D" ResizeDirection="Rows"
+                      HorizontalAlignment="Stretch" />
+
+        <!-- console -->
+        <Border Grid.Row="3" Background="#181818" BorderBrush="#333" BorderThickness="0,1,0,0">
+          <DockPanel>
+            <TextBlock DockPanel.Dock="Top" Text="Console" Margin="8,4"
+                       Foreground="#AAA" FontWeight="SemiBold" />
+            <ScrollViewer Name="ConsoleScroll">
+              <ItemsControl ItemsSource="{Binding Console}" Margin="8,0,8,8">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <TextBlock Text="{Binding}" Foreground="#9CDCFE"
+                               FontFamily="Consolas,monospace" FontSize="11" />
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </DockPanel>
+        </Border>
+      </Grid>
+
+      <GridSplitter Grid.Column="3" Background="#2D2D2D" ResizeDirection="Columns" />
+
+      <!-- ================= Properties ================= -->
+      <Border Grid.Column="4" Background="#232323" BorderBrush="#333" BorderThickness="1,0,0,0">
+        <DockPanel>
+          <TextBlock DockPanel.Dock="Top" Text="Properties" Margin="8,6"
+                     FontWeight="SemiBold" Foreground="#DDD" />
+          <ScrollViewer>
+            <ItemsControl ItemsSource="{Binding Properties}" Margin="8,0,8,8">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:PropertyRow">
+                  <Grid ColumnDefinitions="120,*" Margin="0,2">
+                    <TextBlock Grid.Column="0" Text="{Binding Name}" Foreground="#8A8A8A"
+                               TextWrapping="Wrap" />
+                    <TextBlock Grid.Column="1" Text="{Binding Value}" Foreground="#E8E8E8"
+                               TextWrapping="Wrap" />
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </DockPanel>
+      </Border>
+    </Grid>
+  </DockPanel>
+</Window>

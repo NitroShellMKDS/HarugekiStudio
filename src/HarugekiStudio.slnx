@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="Harugeki.Formats/Harugeki.Formats.csproj" />
+  <Project Path="HarugekiStudio/HarugekiStudio.csproj" />
+</Solution>

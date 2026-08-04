@@ -1,0 +1,525 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.OpenGL;
+using Avalonia.OpenGL.Controls;
+using Harugeki.Formats;
+using System.Numerics;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using static Avalonia.OpenGL.GlConsts;
+
+namespace HarugekiStudio.Rendering;
+
+public enum ShadingMode { Textured, Shaded, Wireframe, Normals, Uv }
+
+/// <summary>Constants Avalonia's GlConsts does not define.</summary>
+internal static class Gl
+{
+    public const int Lines = 0x0001;
+    public const int Repeat = 0x2901;
+}
+
+/// <summary>
+/// Hardware viewport built on Avalonia's own GL binding, so it needs no external
+/// GL package. Geometry is uploaded once per model and drawn with
+/// <c>glDrawArrays</c>: the file already stores a plain triangle list.
+/// </summary>
+public class GlViewport : OpenGlControlBase
+{
+    public static readonly StyledProperty<RingModel?> ModelProperty =
+        AvaloniaProperty.Register<GlViewport, RingModel?>(nameof(Model));
+
+    public static readonly StyledProperty<ShadingMode> ShadingProperty =
+        AvaloniaProperty.Register<GlViewport, ShadingMode>(nameof(Shading));
+
+    public RingModel? Model
+    {
+        get => GetValue(ModelProperty);
+        set => SetValue(ModelProperty, value);
+    }
+
+    public ShadingMode Shading
+    {
+        get => GetValue(ShadingProperty);
+        set => SetValue(ShadingProperty, value);
+    }
+
+    static GlViewport()
+    {
+        // OpenGlControlBase draws on its own request cycle, so invalidating the
+        // visual is not enough -- a frame has to be asked for explicitly or the
+        // viewport keeps showing the previous contents.
+        _ = ModelProperty.Changed.AddClassHandler<GlViewport>((v, _) =>
+        {
+            v._dirty = true;
+            v.RequestNextFrameRendering();
+        });
+        _ = ShadingProperty.Changed.AddClassHandler<GlViewport>(
+            (v, _) => v.RequestNextFrameRendering());
+    }
+
+    // ---- camera ----------------------------------------------------------
+    private float _yaw = 0.6f, _pitch = 0.25f, _distance = 300f;
+    private Vector3 _target = new(0, 80, 0);
+    private Point _lastPointer;
+    private bool _dragging, _panning;
+    private bool _dirty = true;
+
+    // ---- gl objects ------------------------------------------------------
+    private int _program, _vao, _vbo, _lineVbo, _white;
+    private int _uMvp, _uView, _uMode, _uHasTex, _uTex;
+    private int _vertexCount, _lineVertexCount;
+    private readonly List<(int First, int Count, int Texture)> _batches = [];
+    private readonly List<int> _textures = [];
+    private bool _ready;
+
+    public GlViewport()
+    {
+        Focusable = true;
+        ClipToBounds = true;
+    }
+
+    // ---- input -----------------------------------------------------------
+    protected override void OnPointerPressed(PointerPressedEventArgs e)
+    {
+        PointerPoint p = e.GetCurrentPoint(this);
+        _dragging = p.Properties.IsLeftButtonPressed && !e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+        _panning = p.Properties.IsMiddleButtonPressed ||
+                   (p.Properties.IsLeftButtonPressed && e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+        _lastPointer = p.Position;
+        e.Pointer.Capture(this);
+        _ = Focus();
+    }
+
+    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    {
+        _dragging = _panning = false;
+        e.Pointer.Capture(null);
+    }
+
+    protected override void OnPointerMoved(PointerEventArgs e)
+    {
+        if (!_dragging && !_panning)
+        {
+            return;
+        }
+
+        Point p = e.GetPosition(this);
+        double dx = p.X - _lastPointer.X, dy = p.Y - _lastPointer.Y;
+        _lastPointer = p;
+
+        if (_dragging)
+        {
+            _yaw -= (float)dx * 0.01f;
+            _pitch = Math.Clamp(_pitch + ((float)dy * 0.01f), -1.5f, 1.5f);
+        }
+        else
+        {
+            float s = _distance * 0.0015f;
+            Vector3 right = new(MathF.Cos(_yaw), 0, -MathF.Sin(_yaw));
+            _target += (right * (float)-dx * s) + (new Vector3(0, 1, 0) * (float)dy * s);
+        }
+        RequestNextFrameRendering();
+    }
+
+    protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
+    {
+        _distance = Math.Clamp(_distance * MathF.Pow(0.9f, (float)e.Delta.Y), 1f, 100000f);
+        RequestNextFrameRendering();
+    }
+
+    /// <summary>Frames the current model.</summary>
+    public void ResetCamera()
+    {
+        RingModel? model = Model;
+        if (model is null || model.Meshes.Count == 0)
+        {
+            return;
+        }
+
+        float minY = float.MaxValue, maxY = float.MinValue, extent = 1f;
+        foreach (RingMesh m in model.Meshes)
+        {
+            for (int i = 0; i < m.VertexCount; i++)
+            {
+                float y = m.Positions[(i * 3) + 1];
+                minY = MathF.Min(minY, y);
+                maxY = MathF.Max(maxY, y);
+                extent = MathF.Max(extent, MathF.Abs(m.Positions[i * 3]));
+                extent = MathF.Max(extent, MathF.Abs(m.Positions[(i * 3) + 2]));
+            }
+        }
+
+        _target = new Vector3(0, (minY + maxY) * 0.5f, 0);
+        _distance = MathF.Max(maxY - minY, extent * 2f) * 1.6f;
+        _yaw = 0.6f;
+        _pitch = 0.15f;
+        RequestNextFrameRendering();
+    }
+
+    // ---- gl lifecycle ----------------------------------------------------
+    protected override void OnOpenGlInit(GlInterface gl)
+    {
+        bool es = GlVersion.Type == GlProfileType.OpenGLES;
+        string head = es ? "#version 300 es\nprecision highp float;\n" : "#version 330 core\n";
+
+        int vs = gl.CreateShader(GL_VERTEX_SHADER);
+        Check(gl.CompileShaderAndGetError(vs, head + VertexSource), "vertex shader");
+        int fs = gl.CreateShader(GL_FRAGMENT_SHADER);
+        Check(gl.CompileShaderAndGetError(fs, head + FragmentSource), "fragment shader");
+
+        _program = gl.CreateProgram();
+        gl.AttachShader(_program, vs);
+        gl.AttachShader(_program, fs);
+        Check(gl.LinkProgramAndGetError(_program), "program link");
+        gl.DeleteShader(vs);
+        gl.DeleteShader(fs);
+
+        _uMvp = gl.GetUniformLocationString(_program, "uMvp");
+        _uView = gl.GetUniformLocationString(_program, "uView");
+        _uMode = gl.GetUniformLocationString(_program, "uMode");
+        _uHasTex = gl.GetUniformLocationString(_program, "uHasTex");
+        _uTex = gl.GetUniformLocationString(_program, "uTex");
+
+        _vao = gl.GenVertexArray();
+        _vbo = gl.GenBuffer();
+        _lineVbo = gl.GenBuffer();
+        _white = MakeSolidTexture(gl, 0xFFFFFFFF);
+        _ready = true;
+    }
+
+    protected override void OnOpenGlDeinit(GlInterface gl)
+    {
+        if (!_ready)
+        {
+            return;
+        }
+
+        ReleaseModel(gl);
+        gl.DeleteBuffer(_vbo);
+        gl.DeleteBuffer(_lineVbo);
+        gl.DeleteVertexArray(_vao);
+        gl.DeleteTexture(_white);
+        gl.DeleteProgram(_program);
+        _ready = false;
+    }
+
+    protected override void OnOpenGlRender(GlInterface gl, int fb)
+    {
+        double scaling = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
+        int w = Math.Max(1, (int)(Bounds.Width * scaling));
+        int h = Math.Max(1, (int)(Bounds.Height * scaling));
+
+        gl.Viewport(0, 0, w, h);
+        gl.ClearColor(0.16f, 0.16f, 0.17f, 1f);
+        gl.Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        gl.Enable(GL_DEPTH_TEST);
+        gl.DepthFunc(GL_LESS);
+        gl.DepthMask(1);
+        // The game's meshes are authored two-sided; culling would punch holes.
+        gl.Disable(GL_CULL_FACE);
+
+        if (_dirty) { Upload(gl); _dirty = false; }
+        if (_vertexCount == 0)
+        {
+            return;
+        }
+
+        Matrix4x4 view = Matrix4x4.CreateLookAt(EyePosition(), _target, Vector3.UnitY);
+        Matrix4x4 proj = Matrix4x4.CreatePerspectiveFieldOfView(
+            0.9f, w / (float)h, MathF.Max(0.05f, _distance * 0.002f), (_distance * 20f) + 5000f);
+        Matrix4x4 mvp = view * proj;
+
+        gl.UseProgram(_program);
+        UniformMatrix(gl, _uMvp, mvp);
+        UniformMatrix(gl, _uView, view);
+        gl.Uniform1i(_uTex, 0);
+        gl.BindVertexArray(_vao);
+
+        if (Shading == ShadingMode.Wireframe)
+        {
+            // GL_LINES, never glPolygonMode: that entry point does not exist in
+            // GLES and would silently do nothing under ANGLE.
+            gl.Uniform1i(_uMode, (int)ShadingMode.Wireframe);
+            gl.Uniform1f(_uHasTex, 0f);
+            BindAttribs(gl, _lineVbo);
+            gl.DrawArrays(Gl.Lines, 0, _lineVertexCount);
+        }
+        else
+        {
+            BindAttribs(gl, _vbo);
+            gl.Uniform1i(_uMode, (int)Shading);
+            foreach ((int first, int count, int tex) in _batches)
+            {
+                bool textured = Shading == ShadingMode.Textured && tex != 0;
+                gl.ActiveTexture(GL_TEXTURE0);
+                gl.BindTexture(GL_TEXTURE_2D, textured ? tex : _white);
+                gl.Uniform1f(_uHasTex, textured ? 1f : 0f);
+                gl.DrawArrays(GL_TRIANGLES, first, count);
+            }
+        }
+
+        gl.BindVertexArray(0);
+        gl.UseProgram(0);
+    }
+
+    private Vector3 EyePosition()
+    {
+        float cp = MathF.Cos(_pitch);
+        return _target + (new Vector3(
+            MathF.Sin(_yaw) * cp, MathF.Sin(_pitch), MathF.Cos(_yaw) * cp) * _distance);
+    }
+
+    // ---- geometry upload -------------------------------------------------
+    private const int Stride = 36;   // pos 12 + normal 12 + uv 8 + colour 4
+
+    private void Upload(GlInterface gl)
+    {
+        ReleaseModel(gl);
+        _batches.Clear();
+        _vertexCount = _lineVertexCount = 0;
+
+        RingModel? model = Model;
+        if (model is null || model.Meshes.Count == 0)
+        {
+            return;
+        }
+
+        foreach (RingTexture tex in model.Textures)
+        {
+            _textures.Add(MakeTexture(gl, tex));
+        }
+
+        int total = model.Meshes.Sum(m => m.VertexCount);
+        byte[] verts = new byte[total * Stride];
+        byte[] lines = new byte[total * 2 * Stride];
+        int v = 0, l = 0;
+
+        foreach (RingMesh mesh in model.Meshes)
+        {
+            int first = v;
+            int tri = 0;
+            for (int mi = 0; mi < mesh.TriangleCounts.Length; mi++)
+            {
+                int count = mesh.TriangleCounts[mi];
+                int batchFirst = v;
+
+                for (int f = 0; f < count; f++, tri++)
+                {
+                    // Mirror Z into a right-handed frame, matching the glTF
+                    // exporter, and swap two corners so winding survives.
+                    int a = tri * 3, b = (tri * 3) + 2, c = (tri * 3) + 1;
+                    foreach (int idx in (ReadOnlySpan<int>)[a, b, c])
+                    {
+                        WriteVertex(verts, v++ * Stride, mesh, idx);
+                    }
+
+                    int p0 = (v - 3) * Stride, p1 = (v - 2) * Stride, p2 = (v - 1) * Stride;
+                    foreach (int e in (ReadOnlySpan<int>)[p0, p1, p1, p2, p2, p0])
+                    {
+                        Array.Copy(verts, e, lines, l, Stride);
+                        l += Stride;
+                    }
+                }
+
+                int texId = 0;
+                if (mi < mesh.Materials.Count)
+                {
+                    RingMaterial mat = mesh.Materials[mi];
+                    if (mat.HasTexture && mat.TextureIndex < _textures.Count)
+                    {
+                        texId = _textures[(int)mat.TextureIndex];
+                    }
+                }
+                if (v > batchFirst)
+                {
+                    _batches.Add((batchFirst, v - batchFirst, texId));
+                }
+            }
+            _ = first;
+        }
+
+        _vertexCount = v;
+        _lineVertexCount = l / Stride;
+
+        gl.BindBuffer(GL_ARRAY_BUFFER, _vbo);
+        BufferData(gl, verts, _vertexCount * Stride);
+        gl.BindBuffer(GL_ARRAY_BUFFER, _lineVbo);
+        BufferData(gl, lines, _lineVertexCount * Stride);
+        gl.BindBuffer(GL_ARRAY_BUFFER, 0);
+
+        ResetCamera();
+    }
+
+    private static void WriteVertex(byte[] dst, int at, RingMesh mesh, int i)
+    {
+        Span<byte> s = dst.AsSpan(at);
+        _ = BitConverter.TryWriteBytes(s, mesh.Positions[i * 3]);
+        _ = BitConverter.TryWriteBytes(s[4..], mesh.Positions[(i * 3) + 1]);
+        _ = BitConverter.TryWriteBytes(s[8..], -mesh.Positions[(i * 3) + 2]);
+        _ = BitConverter.TryWriteBytes(s[12..], mesh.Normals[i * 3]);
+        _ = BitConverter.TryWriteBytes(s[16..], mesh.Normals[(i * 3) + 1]);
+        _ = BitConverter.TryWriteBytes(s[20..], -mesh.Normals[(i * 3) + 2]);
+        _ = BitConverter.TryWriteBytes(s[24..], mesh.Uvs[i * 2]);
+        _ = BitConverter.TryWriteBytes(s[28..], mesh.Uvs[(i * 2) + 1]);
+        s[32] = mesh.Colors[i * 4];
+        s[33] = mesh.Colors[(i * 4) + 1];
+        s[34] = mesh.Colors[(i * 4) + 2];
+        s[35] = mesh.Colors[(i * 4) + 3];
+    }
+
+    private void BindAttribs(GlInterface gl, int buffer)
+    {
+        gl.BindBuffer(GL_ARRAY_BUFFER, buffer);
+        gl.VertexAttribPointer(0, 3, GL_FLOAT, 0, Stride, 0);
+        gl.VertexAttribPointer(1, 3, GL_FLOAT, 0, Stride, 12);
+        gl.VertexAttribPointer(2, 2, GL_FLOAT, 0, Stride, 24);
+        gl.VertexAttribPointer(3, 4, GL_UNSIGNED_BYTE, 1, Stride, 32);
+        for (int i = 0; i < 4; i++)
+        {
+            gl.EnableVertexAttribArray(i);
+        }
+    }
+
+    private void ReleaseModel(GlInterface gl)
+    {
+        foreach (int t in _textures)
+        {
+            gl.DeleteTexture(t);
+        }
+
+        _textures.Clear();
+    }
+
+    private static void BufferData(GlInterface gl, byte[] data, int length)
+    {
+        GCHandle handle = GCHandle.Alloc(data, GCHandleType.Pinned);
+        try
+        {
+            gl.BufferData(GL_ARRAY_BUFFER, new IntPtr(length), handle.AddrOfPinnedObject(), GL_STATIC_DRAW);
+        }
+        finally
+        {
+            handle.Free();
+        }
+    }
+
+    private static int MakeTexture(GlInterface gl, RingTexture tex)
+    {
+        int id = gl.GenTexture();
+        gl.BindTexture(GL_TEXTURE_2D, id);
+        GCHandle handle = GCHandle.Alloc(tex.Pixels, GCHandleType.Pinned);
+        try
+        {
+            gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex.Width, tex.Height, 0,
+                GL_RGBA, GL_UNSIGNED_BYTE, handle.AddrOfPinnedObject());
+        }
+        finally
+        {
+            handle.Free();
+        }
+        gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, Gl.Repeat);
+        gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, Gl.Repeat);
+        gl.BindTexture(GL_TEXTURE_2D, 0);
+        return id;
+    }
+
+    private static int MakeSolidTexture(GlInterface gl, uint rgba)
+    {
+        int id = gl.GenTexture();
+        gl.BindTexture(GL_TEXTURE_2D, id);
+        byte[] bytes = BitConverter.GetBytes(rgba);
+        GCHandle handle = GCHandle.Alloc(bytes, GCHandleType.Pinned);
+        try
+        {
+            gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, handle.AddrOfPinnedObject());
+        }
+        finally
+        {
+            handle.Free();
+        }
+        gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        gl.BindTexture(GL_TEXTURE_2D, 0);
+        return id;
+    }
+
+    /// <summary>
+    /// System.Numerics matrices are row-major with row-vector semantics, exactly
+    /// like D3D. Uploading them untransposed makes GLSL read the transpose, so
+    /// the column-vector product in the shader is the row-vector product here.
+    /// </summary>
+    private static void UniformMatrix(GlInterface gl, int location, Matrix4x4 m)
+    {
+        float[] f = new float[16]
+        {
+            m.M11, m.M12, m.M13, m.M14, m.M21, m.M22, m.M23, m.M24,
+            m.M31, m.M32, m.M33, m.M34, m.M41, m.M42, m.M43, m.M44,
+        };
+        GCHandle handle = GCHandle.Alloc(f, GCHandleType.Pinned);
+        try
+        {
+            MethodInfo method = typeof(GlInterface).GetMethod("UniformMatrix4fv")
+                         ?? throw new MissingMethodException("GlInterface.UniformMatrix4fv not found");
+            _ = method.Invoke(gl, [location, 1, false, handle.AddrOfPinnedObject()]);
+        }
+        finally
+        {
+            handle.Free();
+        }
+    }
+
+    private static void Check(string? error, string what)
+    {
+        if (!string.IsNullOrEmpty(error))
+        {
+            throw new InvalidOperationException($"{what} failed: {error}");
+        }
+    }
+
+    private const string VertexSource = """
+        layout(location = 0) in vec3 aPos;
+        layout(location = 1) in vec3 aNormal;
+        layout(location = 2) in vec2 aUv;
+        layout(location = 3) in vec4 aColor;
+        uniform mat4 uMvp;
+        uniform mat4 uView;
+        out vec3 vNormal;
+        out vec2 vUv;
+        out vec4 vColor;
+        void main()
+        {
+            vNormal = mat3(uView) * aNormal;
+            vUv = aUv;
+            vColor = aColor;
+            gl_Position = uMvp * vec4(aPos, 1.0);
+        }
+        """;
+
+    private const string FragmentSource = """
+        uniform sampler2D uTex;
+        uniform int uMode;
+        uniform float uHasTex;
+        in vec3 vNormal;
+        in vec2 vUv;
+        in vec4 vColor;
+        out vec4 fragColor;
+        void main()
+        {
+            vec3 n = normalize(vNormal);
+            if (!gl_FrontFacing) n = -n;
+            float lambert = 0.28 + 0.72 * max(n.z, 0.0);
+
+            if (uMode == 3) { fragColor = vec4(n * 0.5 + 0.5, 1.0); return; }
+            if (uMode == 4) { fragColor = vec4(fract(vUv), 0.0, 1.0); return; }
+            if (uMode == 2) { fragColor = vec4(0.55, 0.85, 1.0, 1.0); return; }
+
+            vec4 base = uHasTex > 0.5 ? texture(uTex, vUv) : vec4(0.78, 0.78, 0.80, 1.0);
+            if (uMode == 1) base = vec4(0.78, 0.78, 0.80, 1.0);
+            fragColor = vec4(base.rgb * lambert, 1.0);
+        }
+        """;
+}
