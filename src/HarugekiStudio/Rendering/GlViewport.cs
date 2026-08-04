@@ -36,7 +36,12 @@ public class GlViewport : OpenGlControlBase
     public RingModel? Model
     {
         get => GetValue(ModelProperty);
-        set => SetValue(ModelProperty, value);
+        set
+        {
+            SetValue(ModelProperty, value);
+            _dirty = true;
+            RequestNextFrameRendering();
+        }
     }
 
     public ShadingMode Shading
@@ -47,23 +52,15 @@ public class GlViewport : OpenGlControlBase
 
     static GlViewport()
     {
-        // OpenGlControlBase draws on its own request cycle, so invalidating the
-        // visual is not enough -- a frame has to be asked for explicitly or the
-        // viewport keeps showing the previous contents.
-        _ = ModelProperty.Changed.AddClassHandler<GlViewport>((v, _) =>
-        {
-            v._dirty = true;
-            v.RequestNextFrameRendering();
-        });
         _ = ShadingProperty.Changed.AddClassHandler<GlViewport>(
             (v, _) => v.RequestNextFrameRendering());
     }
 
     // ---- camera ----------------------------------------------------------
     private float _yaw = 0.6f, _pitch = 0.25f, _distance = 300f;
+    private float _targetDistance = 300f;
+    private bool _zoomAnimating;
     private Vector3 _target = new(0, 80, 0);
-    private Point _lastPointer;
-    private bool _dragging, _panning;
     private bool _dirty = true;
 
     // ---- gl objects ------------------------------------------------------
@@ -80,52 +77,37 @@ public class GlViewport : OpenGlControlBase
         ClipToBounds = true;
     }
 
-    // ---- input -----------------------------------------------------------
-    protected override void OnPointerPressed(PointerPressedEventArgs e)
+    private bool _glReady;
+
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
-        PointerPoint p = e.GetCurrentPoint(this);
-        _dragging = p.Properties.IsLeftButtonPressed && !e.KeyModifiers.HasFlag(KeyModifiers.Shift);
-        _panning = p.Properties.IsMiddleButtonPressed ||
-                   (p.Properties.IsLeftButtonPressed && e.KeyModifiers.HasFlag(KeyModifiers.Shift));
-        _lastPointer = p.Position;
-        e.Pointer.Capture(this);
-        _ = Focus();
+        base.OnAttachedToVisualTree(e);
+        if (_glReady)
+        {
+            _dirty = true;
+            RequestNextFrameRendering();
+        }
     }
 
-    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    public void Orbit(double dx, double dy)
     {
-        _dragging = _panning = false;
-        e.Pointer.Capture(null);
-    }
-
-    protected override void OnPointerMoved(PointerEventArgs e)
-    {
-        if (!_dragging && !_panning)
-        {
-            return;
-        }
-
-        Point p = e.GetPosition(this);
-        double dx = p.X - _lastPointer.X, dy = p.Y - _lastPointer.Y;
-        _lastPointer = p;
-
-        if (_dragging)
-        {
-            _yaw -= (float)dx * 0.01f;
-            _pitch = Math.Clamp(_pitch + ((float)dy * 0.01f), -1.5f, 1.5f);
-        }
-        else
-        {
-            float s = _distance * 0.0015f;
-            Vector3 right = new(MathF.Cos(_yaw), 0, -MathF.Sin(_yaw));
-            _target += (right * (float)-dx * s) + (new Vector3(0, 1, 0) * (float)dy * s);
-        }
+        _yaw -= (float)dx * 0.01f;
+        _pitch = Math.Clamp(_pitch + ((float)dy * 0.01f), -1.5f, 1.5f);
         RequestNextFrameRendering();
     }
 
-    protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
+    public void Pan(double dx, double dy)
     {
-        _distance = Math.Clamp(_distance * MathF.Pow(0.9f, (float)e.Delta.Y), 1f, 100000f);
+        float s = _distance * 0.0015f;
+        Vector3 right = new(MathF.Cos(_yaw), 0, -MathF.Sin(_yaw));
+        _target += (right * (float)-dx * s) + (new Vector3(0, 1, 0) * (float)dy * s);
+        RequestNextFrameRendering();
+    }
+
+    public void Zoom(float delta)
+    {
+        _targetDistance = Math.Clamp(_targetDistance * (1f - delta * 0.08f), 1f, 100000f);
+        _zoomAnimating = true;
         RequestNextFrameRendering();
     }
 
@@ -152,7 +134,7 @@ public class GlViewport : OpenGlControlBase
         }
 
         _target = new Vector3(0, (minY + maxY) * 0.5f, 0);
-        _distance = MathF.Max(maxY - minY, extent * 2f) * 1.6f;
+        _distance = _targetDistance = MathF.Max(maxY - minY, extent * 2f) * 1.6f;
         _yaw = 0.6f;
         _pitch = 0.15f;
         RequestNextFrameRendering();
@@ -187,6 +169,9 @@ public class GlViewport : OpenGlControlBase
         _lineVbo = gl.GenBuffer();
         _white = MakeSolidTexture(gl, 0xFFFFFFFF);
         _ready = true;
+        _glReady = true;
+        _dirty = true;
+        RequestNextFrameRendering();
     }
 
     protected override void OnOpenGlDeinit(GlInterface gl)
@@ -202,11 +187,31 @@ public class GlViewport : OpenGlControlBase
         gl.DeleteVertexArray(_vao);
         gl.DeleteTexture(_white);
         gl.DeleteProgram(_program);
+        _program = _vao = _vbo = _lineVbo = _white = 0;
+        _uMvp = _uView = _uMode = _uHasTex = _uTex = 0;
+        _vertexCount = _lineVertexCount = 0;
+        _batches.Clear();
         _ready = false;
+        _glReady = false;
+        _dirty = true;
     }
 
     protected override void OnOpenGlRender(GlInterface gl, int fb)
     {
+        if (_zoomAnimating)
+        {
+            _distance += (_targetDistance - _distance) * 0.25f;
+            if (Math.Abs(_distance - _targetDistance) < 0.1f)
+            {
+                _distance = _targetDistance;
+                _zoomAnimating = false;
+            }
+            else
+            {
+                RequestNextFrameRendering();
+            }
+        }
+
         double scaling = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
         int w = Math.Max(1, (int)(Bounds.Width * scaling));
         int h = Math.Max(1, (int)(Bounds.Height * scaling));
@@ -274,6 +279,10 @@ public class GlViewport : OpenGlControlBase
     // ---- geometry upload -------------------------------------------------
     private const int Stride = 36;   // pos 12 + normal 12 + uv 8 + colour 4
 
+    private static readonly System.Reflection.MethodInfo? s_uniformMatrix4fv =
+        typeof(GlInterface).GetMethod("UniformMatrix4fv",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+
     private void Upload(GlInterface gl)
     {
         ReleaseModel(gl);
@@ -326,8 +335,8 @@ public class GlViewport : OpenGlControlBase
                 int texId = 0;
                 if (mi < mesh.Materials.Count)
                 {
-                    RingMaterial mat = mesh.Materials[mi];
-                    if (mat.HasTexture && mat.TextureIndex < _textures.Count)
+                    RingMaterial? mat = mesh.Materials[mi];
+                    if (mat != null && mat.HasTexture && mat.TextureIndex < _textures.Count)
                     {
                         texId = _textures[(int)mat.TextureIndex];
                     }
@@ -337,7 +346,6 @@ public class GlViewport : OpenGlControlBase
                     _batches.Add((batchFirst, v - batchFirst, texId));
                 }
             }
-            _ = first;
         }
 
         _vertexCount = v;
@@ -407,18 +415,36 @@ public class GlViewport : OpenGlControlBase
 
     private static int MakeTexture(GlInterface gl, RingTexture tex)
     {
+        if (tex.Width <= 0 || tex.Height <= 0)
+        {
+            throw new ArgumentException($"Invalid texture dimensions: {tex.Width}x{tex.Height}");
+        }
+
+        if ((long)tex.Width * tex.Height * 4 != tex.Pixels.Length)
+        {
+            throw new InvalidOperationException(
+                $"Pixel buffer size {tex.Pixels.Length} does not match {tex.Width}x{tex.Height}");
+        }
+
         int id = gl.GenTexture();
         gl.BindTexture(GL_TEXTURE_2D, id);
+
         GCHandle handle = GCHandle.Alloc(tex.Pixels, GCHandleType.Pinned);
         try
         {
             gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex.Width, tex.Height, 0,
                 GL_RGBA, GL_UNSIGNED_BYTE, handle.AddrOfPinnedObject());
         }
+        catch
+        {
+            gl.DeleteTexture(id);
+            throw;
+        }
         finally
         {
             handle.Free();
         }
+
         gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, Gl.Repeat);
@@ -454,6 +480,11 @@ public class GlViewport : OpenGlControlBase
     /// </summary>
     private static void UniformMatrix(GlInterface gl, int location, Matrix4x4 m)
     {
+        if (s_uniformMatrix4fv is null)
+        {
+            throw new MissingMethodException("GlInterface.UniformMatrix4fv not found");
+        }
+
         float[] f = new float[16]
         {
             m.M11, m.M12, m.M13, m.M14, m.M21, m.M22, m.M23, m.M24,
@@ -462,9 +493,8 @@ public class GlViewport : OpenGlControlBase
         GCHandle handle = GCHandle.Alloc(f, GCHandleType.Pinned);
         try
         {
-            MethodInfo method = typeof(GlInterface).GetMethod("UniformMatrix4fv")
-                         ?? throw new MissingMethodException("GlInterface.UniformMatrix4fv not found");
-            _ = method.Invoke(gl, [location, 1, false, handle.AddrOfPinnedObject()]);
+            object[] args = new object[] { location, 1, false, handle.AddrOfPinnedObject() };
+            _ = s_uniformMatrix4fv.Invoke(gl, args);
         }
         finally
         {

@@ -154,12 +154,7 @@ public static class GltfWriter
         int skin = -1;
         if (bones.Count > 0)
         {
-            float[] ibm = new float[bones.Count * 16];
-            for (int i = 0; i < bones.Count; i++)
-            {
-                CopyMatrix(inverse[i], ibm, i * 16);
-            }
-
+            float[] ibm = BuildInverseBindMatrixArray(inverse, bones.Count);
             skin = 0;
         }
 
@@ -272,11 +267,7 @@ public static class GltfWriter
         JsonArray skins = [];
         if (skin >= 0)
         {
-            float[] ibm = new float[bones.Count * 16];
-            for (int i = 0; i < bones.Count; i++)
-            {
-                CopyMatrix(inverse[i], ibm, i * 16);
-            }
+            float[] ibm = BuildInverseBindMatrixArray(inverse, bones.Count);
 
             skins.Add(new JsonObject
             {
@@ -323,6 +314,16 @@ public static class GltfWriter
         File.WriteAllText(Path.Combine(dir, stem + ".gltf"),
             gltf.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
             new UTF8Encoding(false));
+    }
+
+    private static float[] BuildInverseBindMatrixArray(Matrix4x4[] inverse, int count)
+    {
+        float[] ibm = new float[count * 16];
+        for (int i = 0; i < count; i++)
+        {
+            CopyMatrix(inverse[i], ibm, i * 16);
+        }
+        return ibm;
     }
 
     private static (ushort[] Joints, float[] Weights, bool Skinned) BuildSkin(

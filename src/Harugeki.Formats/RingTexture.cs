@@ -22,6 +22,8 @@ namespace Harugeki.Formats;
 public sealed class RingTexture
 {
     public const int HeaderSize = 0x40;
+    private const int MaxDimension = 16384;  // 16K, supported by modern GPUs
+    private const long MaxPixelCount = 256L * 1024 * 1024;  // 256M pixels
     private static ReadOnlySpan<byte> Magic => "ringtex2"u8;
 
     public string Name { get; set; } = string.Empty;
@@ -48,17 +50,36 @@ public sealed class RingTexture
 
         int w = (int)AssetTypes.U32(blob, 0x2C);
         int h = (int)AssetTypes.U32(blob, 0x30);
-        long need = (long)w * h * 4;
-        return w <= 0 || h <= 0 || HeaderSize + need > blob.Length
-            ? throw new ArgumentException($"bad ringtex2 dimensions {w}x{h} for {blob.Length} bytes")
-            : new RingTexture
-            {
-                Name = AssetTypes.ReadName(blob, 0x10, 16),
-                Width = w,
-                Height = h,
-                Pixels = blob.Slice(HeaderSize, (int)need).ToArray(),
-                HeaderTail = blob[..HeaderSize].ToArray(),
-            };
+
+        if (w <= 0 || w > MaxDimension || h <= 0 || h > MaxDimension)
+        {
+            throw new ArgumentException(
+                $"Texture dimensions {w}x{h} out of valid range (1-{MaxDimension})");
+        }
+
+        long pixelCount = (long)w * h;
+        if (pixelCount > MaxPixelCount)
+        {
+            throw new ArgumentException(
+                $"Texture pixel count {pixelCount} exceeds maximum {MaxPixelCount}");
+        }
+
+        long need = pixelCount * 4;
+
+        if (HeaderSize + need > blob.Length)
+        {
+            throw new ArgumentException(
+                $"Texture blob {blob.Length} bytes too small for {w}x{h} RGBA8 data ({HeaderSize + need} bytes needed)");
+        }
+
+        return new RingTexture
+        {
+            Name = AssetTypes.ReadName(blob, 0x10, 16),
+            Width = w,
+            Height = h,
+            Pixels = blob.Slice(HeaderSize, (int)need).ToArray(),
+            HeaderTail = blob[..HeaderSize].ToArray(),
+        };
     }
 
     /// <summary>

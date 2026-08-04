@@ -1,4 +1,3 @@
-using Avalonia.Controls;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -18,12 +17,14 @@ public sealed record OpenArchive(RingArchive Archive, string Path)
 
 public partial class MainViewModel : ObservableObject
 {
-    private readonly Window _window;
+    private const int MaxConsoleLines = 500;
+    private readonly IAppStorageProvider _storageProvider;
     private readonly List<OpenArchive> _open = [];
 
     [ObservableProperty] private TreeItemViewModel? _selectedItem;
     [ObservableProperty] private RingModel? _viewportModel;
-    [ObservableProperty] private Bitmap? _texturePreview;
+    [ObservableProperty] private string _searchFilter = "";
+    private Bitmap? _texturePreview;
     [ObservableProperty] private string _textureCaption = "";
     [ObservableProperty] private int _selectedPane;
     [ObservableProperty] private ShadingMode _shading = ShadingMode.Textured;
@@ -34,17 +35,62 @@ public partial class MainViewModel : ObservableObject
     public ObservableCollection<string> Console { get; } = [];
     public Array ShadingModes { get; } = Enum.GetValues<ShadingMode>();
 
-    public MainViewModel(Window window)
+    public MainViewModel(IAppStorageProvider storageProvider)
     {
-        _window = window;
+        _storageProvider = storageProvider;
         Log("Harugeki Studio ready.");
+    }
+
+    public Bitmap? TexturePreview
+    {
+        get => _texturePreview;
+        set
+        {
+            if (ReferenceEquals(_texturePreview, value)) return;
+            _texturePreview?.Dispose();
+            SetProperty(ref _texturePreview, value);
+        }
+    }
+
+    partial void OnSearchFilterChanged(string value)
+    {
+        ApplySearchFilter();
+    }
+
+    private void ApplySearchFilter()
+    {
+        if (string.IsNullOrWhiteSpace(SearchFilter))
+        {
+            return;
+        }
+
+        string lower = SearchFilter.ToLowerInvariant();
+        foreach (TreeItemViewModel item in Roots)
+        {
+            item.IsExpanded = true;
+            ExpandMatching(item, lower);
+        }
+    }
+
+    private static bool ExpandMatching(TreeItemViewModel item, string lower)
+    {
+        bool anyMatch = false;
+        foreach (TreeItemViewModel child in item.Children)
+        {
+            if (ExpandMatching(child, lower) || child.Header.Contains(lower, StringComparison.OrdinalIgnoreCase))
+            {
+                child.IsExpanded = true;
+                anyMatch = true;
+            }
+        }
+        return anyMatch;
     }
 
     private void Log(string line)
     {
         Console.Add($"[{DateTime.Now:HH:mm:ss}] {line}");
         Status = line;
-        while (Console.Count > 500)
+        while (Console.Count > MaxConsoleLines)
         {
             Console.RemoveAt(0);
         }
@@ -126,6 +172,10 @@ public partial class MainViewModel : ObservableObject
     private void ShowModel(RingModel model)
     {
         ViewportModel = model;
+        if (SelectedPane == 0)
+        {
+            SelectedPane = -1;
+        }
         SelectedPane = 0;
     }
 
@@ -147,7 +197,7 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private async Task OpenAsync()
     {
-        IReadOnlyList<IStorageFile> files = await _window.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        IReadOnlyList<IStorageFile> files = await _storageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
             Title = "Open archive",
             AllowMultiple = true,
@@ -208,7 +258,7 @@ public partial class MainViewModel : ObservableObject
 
     private async Task ExportModelAsync(RingModel model)
     {
-        IStorageFile? file = await _window.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        IStorageFile? file = await _storageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
         {
             Title = "Export model",
             SuggestedFileName = GltfWriter.SafeName(model.Name) + ".gltf",
@@ -233,7 +283,7 @@ public partial class MainViewModel : ObservableObject
 
     private async Task ExportTextureAsync(TextureAsset asset)
     {
-        IStorageFile? file = await _window.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        IStorageFile? file = await _storageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
         {
             Title = "Export texture",
             SuggestedFileName = GltfWriter.SafeName(asset.Texture.Name) + ".png",
@@ -264,7 +314,7 @@ public partial class MainViewModel : ObservableObject
             return;
         }
 
-        IReadOnlyList<IStorageFile> files = await _window.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        IReadOnlyList<IStorageFile> files = await _storageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
             Title = $"Replace {asset.Texture.Name} ({asset.Texture.Width}x{asset.Texture.Height})",
             AllowMultiple = false,
@@ -331,10 +381,12 @@ public partial class MainViewModel : ObservableObject
 
     public event Action? ResetViewRequested;
 
+    public event Action? RequestClose;
+
     [RelayCommand]
     private void Exit()
     {
-        _window.Close();
+        RequestClose?.Invoke();
     }
 }
 

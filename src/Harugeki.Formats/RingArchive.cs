@@ -20,6 +20,7 @@ public sealed class RingArchive
 {
     public const byte Pad = 0xFE;
     public const int Align = 32;
+    private const long MaxArchiveSize = 4L * 1024 * 1024 * 1024;  // 4 GB limit
 
     public byte[] Data { get; }
     public string? Path { get; }
@@ -34,6 +35,19 @@ public sealed class RingArchive
 
     public static RingArchive Load(string path)
     {
+        FileInfo fileInfo = new(path);
+
+        if (fileInfo.Length > MaxArchiveSize)
+        {
+            throw new InvalidOperationException(
+                $"Archive file is too large ({fileInfo.Length / 1024 / 1024} MB). Maximum supported: {MaxArchiveSize / 1024 / 1024} MB");
+        }
+
+        if (fileInfo.Length < 8)
+        {
+            throw new InvalidOperationException("Archive file is too small to be valid");
+        }
+
         return new(File.ReadAllBytes(path), path);
     }
 

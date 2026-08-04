@@ -47,8 +47,9 @@
         <DockPanel>
           <TextBlock DockPanel.Dock="Top" Text="Outliner" Margin="8,6,8,4"
                      FontWeight="SemiBold" Foreground="#DDD" />
-          <TextBox DockPanel.Dock="Top" Name="SearchBox" PlaceholderText="Search"
-                   Margin="6,0,6,6" Height="26" FontSize="12" />
+          <TextBox DockPanel.Dock="Top" Name="SearchBox"
+                   Text="{Binding SearchFilter, Mode=TwoWay}"
+                   PlaceholderText="Search" Margin="6,0,6,6" Height="26" FontSize="12" />
           <TreeView ItemsSource="{Binding Roots}"
                     SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
                     Background="Transparent" BorderThickness="0">
@@ -100,9 +101,14 @@
         <TabControl Grid.Row="1" SelectedIndex="{Binding SelectedPane, Mode=TwoWay}"
                     Background="#1A1A1A">
           <TabItem Header="Viewport">
-            <r:GlViewport Name="Viewport"
-                          Model="{Binding ViewportModel}"
-                          Shading="{Binding Shading}" />
+            <Border Background="Transparent"
+                    PointerPressed="Viewport_OnPointerPressed"
+                    PointerMoved="Viewport_OnPointerMoved"
+                    PointerWheelChanged="Viewport_OnPointerWheel">
+              <r:GlViewport Name="Viewport"
+                            Model="{Binding ViewportModel}"
+                            Shading="{Binding Shading}" />
+            </Border>
           </TabItem>
           <TabItem Header="Texture">
             <DockPanel Background="#141414">

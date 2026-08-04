@@ -63,12 +63,21 @@ public partial class TreeItemViewModel : ObservableObject
             return;
         }
 
-        _loaded = true;
-        List<TreeItemViewModel> items = Loader().ToList();
-        Children.Clear();
-        foreach (TreeItemViewModel c in items)
+        try
         {
-            Children.Add(c);
+            List<TreeItemViewModel> items = Loader().ToList();
+            Children.Clear();
+            foreach (TreeItemViewModel c in items)
+            {
+                Children.Add(c);
+            }
+            _loaded = true;
+        }
+        catch (Exception ex)
+        {
+            Children.Clear();
+            Children.Add(new TreeItemViewModel("Error", ex.Message, ""));
+            _loaded = true;
         }
     }
 
@@ -256,6 +265,11 @@ public sealed record TextureAsset(
 {
     public void Replace(byte[] rgbaPixels)
     {
+        if (Node.Archive == null)
+        {
+            throw new InvalidOperationException("Texture's archive has been unloaded");
+        }
+
         RingTexture replacement = new()
         {
             Name = Texture.Name,
@@ -268,11 +282,11 @@ public sealed record TextureAsset(
 
         if (Owner is null)
         {
-            // The node is the texture. Keep any trailing container padding.
             byte[] payload = Node.GetPayload();
             if (encoded.Length > payload.Length)
             {
-                throw new InvalidDataException("encoded texture is larger than its slot");
+                throw new InvalidDataException(
+                    $"Encoded texture ({encoded.Length} bytes) exceeds slot size ({payload.Length} bytes)");
             }
 
             encoded.CopyTo(payload, 0);
@@ -280,13 +294,26 @@ public sealed record TextureAsset(
         }
         else
         {
+            if (IndexInOwner < 0 || IndexInOwner >= Owner.TextureSpans.Count)
+            {
+                throw new InvalidOperationException(
+                    $"Texture index {IndexInOwner} out of range for model");
+            }
+
             (int offset, int length) = Owner.TextureSpans[IndexInOwner];
             if (encoded.Length > length)
             {
-                throw new InvalidDataException("encoded texture is larger than its slot");
+                throw new InvalidDataException(
+                    $"Encoded embedded texture ({encoded.Length} bytes) exceeds slot size ({length} bytes)");
             }
 
             byte[] payload = Node.GetPayload();
+            if (payload.Length < offset + encoded.Length)
+            {
+                throw new InvalidOperationException(
+                    "Model blob is corrupted or truncated");
+            }
+
             encoded.CopyTo(payload, offset);
             Node.Replace(payload);
         }
