@@ -15,6 +15,15 @@ namespace Harugeki.Formats;
 ///
 /// A node is a mesh when the four bytes at +0x70 are "Mate" (the start of its
 /// first material name); otherwise it is a bone.
+///
+/// <para>
+/// Coordinate system: the file stores geometry in a left-handed layout with
+/// X and Z mirrored compared to standard Z-up Cartesian. On load, X and Z
+/// are negated so consumers see standard right-handed coordinates: X right,
+/// Y forward, Z up. Bone bind and inverse-bind matrices receive the same
+/// conjugation so the skeleton stays consistent. UVs, colors, and weight
+/// indices are passed through unchanged.
+/// </para>
 /// </summary>
 public sealed class RingModel
 {
@@ -151,8 +160,13 @@ public sealed class RingBone
     public int Related { get; init; }
     public int ParentNodeIndex => Related - 1;
     public int MeshIndex { get; init; }
-    /// <summary>Row-major 4x4, D3D row-vector convention.</summary>
+    /// <summary>Row-major 4x4, D3D row-vector convention. Converted to Blender XZY
+    /// space at parse time: X and Z basis rows and their translation components
+    /// are negated so the matrix expresses the same transform in standard
+    /// right-handed coordinates where Blender Y is up.</summary>
     public float[] Bind { get; init; } = new float[16];
+    /// <summary>Row-major 4x4 inverse of <see cref="Bind"/>, converted with the
+    /// same X/Z mirror so it remains the true inverse after the coordinate fix.</summary>
     public float[] InverseBind { get; init; } = new float[16];
     public int[] WeightVertices { get; init; } = [];
     public float[] Weights { get; init; } = [];
@@ -172,6 +186,16 @@ public sealed class RingBone
             bind[i] = AssetTypes.F32(blob, off + 0x88 + (i * 4));
             inv[i] = AssetTypes.F32(blob, off + 0xC8 + (i * 4));
         }
+
+        // File coordinates are left-handed with width and height mirrored.
+        // Conjugate both bind and inverse-bind by diag(-1, 1, -1, 1) so they
+        // describe the same transforms in standard right-handed X/Y/Z space.
+        // Negate X basis row (0,1,2), keep Y row (4,5,6), negate Z row (8,9,10),
+        // and negate X/Z in the translation row (12,14), keep Y (13).
+        int[] negBind = [0, 1, 2, 8, 9, 10, 12, 14];
+        foreach (int i in negBind) bind[i] = -bind[i];
+        int[] negInv = [0, 1, 2, 8, 9, 10, 12, 14];
+        foreach (int i in negInv) inv[i] = -inv[i];
 
         int[] verts = new int[n];
         float[] weights = new float[n];
@@ -287,8 +311,11 @@ public sealed class RingMesh
         float[] skinNrm = new float[nverts * 3];
         for (int i = 0; i < nverts * 3; i++)
         {
-            skinPos[i] = AssetTypes.F32(blob, posOff + (i * 4));
-            skinNrm[i] = AssetTypes.F32(blob, posOff + (nverts * 12) + (i * 4));
+            float sp = AssetTypes.F32(blob, posOff + (i * 4));
+            float sn = AssetTypes.F32(blob, posOff + (nverts * 12) + (i * 4));
+            int axis = i % 3;
+            skinPos[i] = axis is 0 or 2 ? -sp : sp;
+            skinNrm[i] = axis is 0 or 2 ? -sn : sn;
         }
 
         List<RingMaterial> materials = [];
@@ -332,8 +359,10 @@ public sealed class RingMesh
                 int j = (f * 3) + k;
                 for (int c = 0; c < 3; c++)
                 {
-                    pos[(j * 3) + c] = AssetTypes.F32(blob, at + (c * 4));
-                    nrm[(j * 3) + c] = AssetTypes.F32(blob, at + 0x0C + (c * 4));
+                    float p = AssetTypes.F32(blob, at + (c * 4));
+                    float normal = AssetTypes.F32(blob, at + 0x0C + (c * 4));
+                    pos[(j * 3) + c] = c is 0 or 2 ? -p : p;
+                    nrm[(j * 3) + c] = c is 0 or 2 ? -normal : normal;
                 }
                 uv[(j * 2) + 0] = AssetTypes.F32(blob, at + 0x18);
                 uv[(j * 2) + 1] = AssetTypes.F32(blob, at + 0x1C);

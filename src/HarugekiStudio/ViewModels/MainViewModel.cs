@@ -42,6 +42,11 @@ public partial class MainViewModel : ObservableObject
 
     public ObservableCollection<TreeItemViewModel> CurrentItems => IsSearchActive ? SearchResults : Roots;
 
+    public bool IsExtractRawVisible => SelectedItem?.Payload is RingNode or ModelAsset or TextureAsset;
+    public bool IsExportVisible => SelectedItem?.Payload is ModelAsset or MeshAsset or TextureAsset;
+    public bool IsReplaceRawVisible => SelectedItem?.Payload is RingNode or ModelAsset or TextureAsset;
+    public bool IsReplaceVisible => SelectedItem?.Payload is TextureAsset;
+
     partial void OnIsSearchActiveChanged(bool value)
     {
         OnPropertyChanged(nameof(CurrentItems));
@@ -221,6 +226,11 @@ public partial class MainViewModel : ObservableObject
     // ---- selection -------------------------------------------------------
     partial void OnSelectedItemChanged(TreeItemViewModel? value)
     {
+        OnPropertyChanged(nameof(IsExtractRawVisible));
+        OnPropertyChanged(nameof(IsExportVisible));
+        OnPropertyChanged(nameof(IsReplaceRawVisible));
+        OnPropertyChanged(nameof(IsReplaceVisible));
+
         Properties.Clear();
         if (value is null) return;
 
@@ -303,6 +313,7 @@ public partial class MainViewModel : ObservableObject
         TexturePreview = ImageIO.ToBitmap(t);
         TextureCaption = $"{t.Name}   {t.Width} x {t.Height}   RGBA8";
         SelectedPane = 1;
+        Properties.Clear();
         Properties.Add(new PropertyRow("Texture", t.Name));
         Properties.Add(new PropertyRow("Size", $"{t.Width} x {t.Height}"));
         Properties.Add(new PropertyRow("Format", "RGBA8 uncompressed"));
@@ -378,14 +389,14 @@ public partial class MainViewModel : ObservableObject
     {
         switch (SelectedItem?.Payload)
         {
-            case ModelAsset m: await ExportModelAsync(m.Model); break;
-            case MeshAsset ms: await ExportModelAsync(ms.Model); break;
-            case TextureAsset t: await ExportTextureAsync(t); break;
+            case ModelAsset m: await ExportModel(m.Model); break;
+            case MeshAsset ms: await ExportModel(ms.Model); break;
+            case TextureAsset t: await ExportTexture(t); break;
             default: Log("Select a model or a texture to export."); break;
         }
     }
 
-    private async Task ExportModelAsync(RingModel model)
+    private async Task ExportModel(RingModel model)
     {
         IStorageFile? file = await _storageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
         {
@@ -410,7 +421,7 @@ public partial class MainViewModel : ObservableObject
         catch (Exception ex) { Log($"Export failed: {ex.Message}"); }
     }
 
-    private async Task ExportTextureAsync(TextureAsset asset)
+    private async Task ExportTexture(TextureAsset asset)
     {
         IStorageFile? file = await _storageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
         {
@@ -434,7 +445,51 @@ public partial class MainViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private async Task ReplaceAsync()
+    private async Task ExtractRawAsync()
+    {
+        RingNode? node = GetNodeFromPayload(SelectedItem?.Payload);
+        if (node is null)
+        {
+            Log("Select a node to extract raw.");
+            return;
+        }
+
+        string suggestedName = GetSuggestedRawName(SelectedItem!, node);
+
+        IStorageFile? file = await _storageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = $"Extract raw {node.PathText}",
+            SuggestedFileName = suggestedName,
+            DefaultExtension = "bin",
+            FileTypeChoices = [new FilePickerFileType("Raw data") { Patterns = ["*.bin", "*.*"] }],
+        });
+        if (file is null) return;
+
+        try
+        {
+            string? path = file.TryGetLocalPath();
+            if (path is null) return;
+
+            byte[] data = node.GetPayload();
+            File.WriteAllBytes(path, data);
+            Log($"Extracted raw {node.PathText} ({TreeBuilder.Size(data.Length)}) to {Path.GetFileName(path)}.");
+        }
+        catch (Exception ex) { Log($"Extract raw failed: {ex.Message}"); }
+    }
+
+    private static string GetSuggestedRawName(TreeItemViewModel item, RingNode node)
+    {
+        string header = item.Header;
+        int bracket = header.IndexOf(']');
+        if (bracket >= 0 && header.Length > bracket + 1 && header[bracket + 1] == ' ')
+        {
+            return header[(bracket + 2)..];
+        }
+        return Path.GetFileName(node.PathText);
+    }
+
+    [RelayCommand]
+    private async Task ReplaceTextureAsync()
     {
         if (SelectedItem?.Payload is not TextureAsset asset)
         {
@@ -468,6 +523,57 @@ public partial class MainViewModel : ObservableObject
                 + "Use File > Save to write it back.");
         }
         catch (Exception ex) { Log($"Replace failed: {ex.Message}"); }
+    }
+
+    [RelayCommand]
+    private async Task ReplaceRawAsync()
+    {
+        RingNode? node = GetNodeFromPayload(SelectedItem?.Payload);
+        if (node is null)
+        {
+            Log("Select a node to replace raw.");
+            return;
+        }
+
+        IReadOnlyList<IStorageFile> files = await _storageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = $"Replace raw {node.PathText}",
+            AllowMultiple = false,
+            FileTypeFilter = [new FilePickerFileType("All files") { Patterns = ["*.*"] }],
+        });
+        if (files.Count == 0) return;
+
+        try
+        {
+            string? path = files[0].TryGetLocalPath();
+            if (path is null) return;
+
+            byte[] data = File.ReadAllBytes(path);
+            if (data.Length > node.Length)
+            {
+                Log($"Replace raw failed: file ({TreeBuilder.Size(data.Length)}) exceeds slot size ({TreeBuilder.Size(node.Length)}).");
+                return;
+            }
+
+            node.Replace(data);
+
+            OpenArchive? owner = _open.FirstOrDefault(o => ReferenceEquals(o.Archive, node.Archive));
+            owner?.Dirty = true;
+
+            Log($"Replaced raw {node.PathText} with {Path.GetFileName(path)} ({TreeBuilder.Size(data.Length)}). Use File > Save to write back.");
+        }
+        catch (Exception ex) { Log($"Replace raw failed: {ex.Message}"); }
+    }
+
+    private static RingNode? GetNodeFromPayload(object? payload)
+    {
+        return payload switch
+        {
+            RingNode node => node,
+            ModelAsset m => m.Node,
+            TextureAsset t => t.Node,
+            _ => null
+        };
     }
 
     [RelayCommand]

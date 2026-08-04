@@ -320,9 +320,9 @@ public class GlViewport : OpenGlControlBase
 
                 for (int f = 0; f < count; f++, tri++)
                 {
-                    // Mirror Z into a right-handed frame, matching the glTF
-                    // exporter, and swap two corners so winding survives.
-                    int a = tri * 3, b = (tri * 3) + 2, c = (tri * 3) + 1;
+                    // X and Y mirrors combine to a 180° rotation, so winding is
+                    // preserved — no corner swap needed.
+                    int a = tri * 3, b = (tri * 3) + 1, c = (tri * 3) + 2;
                     foreach (int idx in (ReadOnlySpan<int>)[a, b, c])
                     {
                         WriteVertex(verts, v++ * Stride, mesh, idx);
@@ -369,10 +369,10 @@ public class GlViewport : OpenGlControlBase
         Span<byte> s = dst.AsSpan(at);
         _ = BitConverter.TryWriteBytes(s, mesh.Positions[i * 3]);
         _ = BitConverter.TryWriteBytes(s[4..], mesh.Positions[(i * 3) + 1]);
-        _ = BitConverter.TryWriteBytes(s[8..], -mesh.Positions[(i * 3) + 2]);
+        _ = BitConverter.TryWriteBytes(s[8..], mesh.Positions[(i * 3) + 2]);
         _ = BitConverter.TryWriteBytes(s[12..], mesh.Normals[i * 3]);
         _ = BitConverter.TryWriteBytes(s[16..], mesh.Normals[(i * 3) + 1]);
-        _ = BitConverter.TryWriteBytes(s[20..], -mesh.Normals[(i * 3) + 2]);
+        _ = BitConverter.TryWriteBytes(s[20..], mesh.Normals[(i * 3) + 2]);
         _ = BitConverter.TryWriteBytes(s[24..], mesh.Uvs[i * 2]);
         _ = BitConverter.TryWriteBytes(s[28..], mesh.Uvs[(i * 2) + 1]);
         s[32] = mesh.Colors[i * 4];

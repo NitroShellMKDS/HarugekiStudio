@@ -7,13 +7,13 @@ using System.Text.Json.Nodes;
 namespace HarugekiStudio.Services;
 
 /// <summary>
-/// Writes a model as glTF 2.0 (.gltf + .bin + PNG textures).
+/// Writes a model as glTF 2.0 (.gltf + PNG textures).
 ///
-/// The game is Direct3D 9: left-handed, Y up, row-vector matrices with the
-/// translation in the last row. A row-major D3D matrix flattened in memory is
-/// bit-identical to its transpose flattened column-major, so the stored floats
-/// go into glTF unchanged. Handedness is fixed by mirroring Z and flipping
-/// triangle winding to match. UVs pass through: both put the origin top-left.
+/// The parser already converts file coordinates to standard Z-up Cartesian on
+/// load, so positions, normals, and bone bind matrices arrive here in right-
+/// handed X-right / Y-forward / Z-up form. This writer copies them straight
+/// through, appends a base64-embedded binary buffer inside the .gltf, and
+/// writes textures into a sibling folder. UVs are untouched.
 /// </summary>
 public static class GltfWriter
 {
@@ -169,21 +169,21 @@ public static class GltfWriter
             float[] pos = new float[n * 3];
             float[] nrm = new float[n * 3];
             float[] uv = new float[n * 2];
-            byte[] col = new byte[n * 4];
+            float[] col = new float[n * 4];
             for (int i = 0; i < n; i++)
             {
                 pos[i * 3] = mesh.Positions[i * 3];
                 pos[(i * 3) + 1] = mesh.Positions[(i * 3) + 1];
-                pos[(i * 3) + 2] = -mesh.Positions[(i * 3) + 2];
+                pos[(i * 3) + 2] = mesh.Positions[(i * 3) + 2];
                 nrm[i * 3] = mesh.Normals[i * 3];
                 nrm[(i * 3) + 1] = mesh.Normals[(i * 3) + 1];
-                nrm[(i * 3) + 2] = -mesh.Normals[(i * 3) + 2];
+                nrm[(i * 3) + 2] = mesh.Normals[(i * 3) + 2];
                 uv[i * 2] = mesh.Uvs[i * 2];
                 uv[(i * 2) + 1] = mesh.Uvs[(i * 2) + 1];
-                for (int c = 0; c < 4; c++)
-                {
-                    col[(i * 4) + c] = mesh.Colors[(i * 4) + c];
-                }
+                col[i * 4] = mesh.Colors[i * 4] / 255.0f;
+                col[(i * 4) + 1] = mesh.Colors[(i * 4) + 1] / 255.0f;
+                col[(i * 4) + 2] = mesh.Colors[(i * 4) + 2] / 255.0f;
+                col[(i * 4) + 3] = mesh.Colors[(i * 4) + 3] / 255.0f;
             }
 
             JsonObject attributes = new()
@@ -191,7 +191,7 @@ public static class GltfWriter
                 ["POSITION"] = Accessor(pos, 3, Float, minMax: true),
                 ["NORMAL"] = Accessor(nrm, 3, Float),
                 ["TEXCOORD_0"] = Accessor(uv, 2, Float),
-                ["COLOR_0"] = Accessor(col, 4, UByte, normalized: true),
+                ["COLOR_0"] = Accessor(col, 4, Float),
             };
 
             (ushort[]? joints, float[]? weights, bool skinned) = BuildSkin(model, mesh, slotOf);
@@ -209,10 +209,11 @@ public static class GltfWriter
                 uint[] idx = new uint[count * 3];
                 for (int f = 0; f < count; f++)
                 {
-                    // mirroring reverses orientation, so flip winding back
-                    idx[f * 3] = (uint)(((first + f) * 3) + 2);
+                    // X and Y mirrors combine to a 180° rotation, so winding is
+                    // preserved — no corner swap needed.
+                    idx[f * 3] = (uint)((first + f) * 3);
                     idx[(f * 3) + 1] = (uint)(((first + f) * 3) + 1);
-                    idx[(f * 3) + 2] = (uint)((first + f) * 3);
+                    idx[(f * 3) + 2] = (uint)(((first + f) * 3) + 2);
                 }
                 first += count;
 
@@ -228,7 +229,7 @@ public static class GltfWriter
                     JsonObject pbr = new()
                     {
                         ["baseColorFactor"] = new JsonArray(
-                            [.. mat.Color.Select(c => JsonValue.Create(c))]),
+                            [JsonValue.Create(1.0), JsonValue.Create(1.0), JsonValue.Create(1.0), JsonValue.Create(1.0)]),
                         ["metallicFactor"] = 0.0,
                         ["roughnessFactor"] = 1.0,
                     };
@@ -302,7 +303,7 @@ public static class GltfWriter
             ["bufferViews"] = views,
             ["buffers"] = new JsonArray
             {
-                new JsonObject { ["uri"] = stem + ".bin", ["byteLength"] = (int)bin.Length },
+                new JsonObject { ["uri"] = "data:application/octet-stream;base64," + Convert.ToBase64String(bin.ToArray()), ["byteLength"] = (int)bin.Length },
             },
         };
         if (skins.Count > 0)
@@ -310,7 +311,6 @@ public static class GltfWriter
             gltf["skins"] = skins;
         }
 
-        File.WriteAllBytes(Path.Combine(dir, stem + ".bin"), bin.ToArray());
         File.WriteAllText(Path.Combine(dir, stem + ".gltf"),
             gltf.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
             new UTF8Encoding(false));
@@ -376,14 +376,13 @@ public static class GltfWriter
         return (joints, weights, true);
     }
 
-    /// <summary>Conjugates a row-vector D3D matrix by diag(1,1,-1,1).</summary>
+    /// <summary>Passes the row-vector D3D bind matrix through unchanged.</summary>
     private static Matrix4x4 Mirror(float[] m)
     {
-        Matrix4x4 s = new(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1);
         Matrix4x4 v = new(
             m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7],
             m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]);
-        return s * v * s;
+        return v;
     }
 
     private static JsonArray MatrixArray(Matrix4x4 m)
