@@ -14,12 +14,14 @@ public partial class TreeItemViewModel : ObservableObject
     [ObservableProperty] private bool _isSelected;
 
     private bool _loaded;
+    public object LoadLock { get; } = new();
 
     public TreeItemViewModel(string header, string detail = "", string kind = "")
     {
         Header = header;
         Detail = detail;
         Kind = kind;
+        HeaderSegments.Add(new TextSegment(header, false));
     }
 
     public string Header { get; }
@@ -30,6 +32,8 @@ public partial class TreeItemViewModel : ObservableObject
     public object? Payload { get; init; }
 
     public ObservableCollection<TreeItemViewModel> Children { get; } = [];
+
+    public ObservableCollection<TextSegment> HeaderSegments { get; } = [];
 
     /// <summary>
     /// Populates <see cref="Children"/>, once, on first expand. Setting a loader
@@ -63,21 +67,29 @@ public partial class TreeItemViewModel : ObservableObject
             return;
         }
 
-        try
+        lock (LoadLock)
         {
-            List<TreeItemViewModel> items = Loader().ToList();
-            Children.Clear();
-            foreach (TreeItemViewModel c in items)
+            if (_loaded || Loader is null)
             {
-                Children.Add(c);
+                return;
             }
-            _loaded = true;
-        }
-        catch (Exception ex)
-        {
-            Children.Clear();
-            Children.Add(new TreeItemViewModel("Error", ex.Message, ""));
-            _loaded = true;
+
+            try
+            {
+                List<TreeItemViewModel> items = Loader().ToList();
+                Children.Clear();
+                foreach (TreeItemViewModel c in items)
+                {
+                    Children.Add(c);
+                }
+                _loaded = true;
+            }
+            catch (Exception ex)
+            {
+                Children.Clear();
+                Children.Add(new TreeItemViewModel("Error", ex.Message, ""));
+                _loaded = true;
+            }
         }
     }
 
@@ -92,6 +104,44 @@ public partial class TreeItemViewModel : ObservableObject
         "Container" => "#DDDDDD",
         _ => "#909090",
     };
+
+    public void UpdateSearchHighlight(string? searchText)
+    {
+        HeaderSegments.Clear();
+
+        if (string.IsNullOrEmpty(Header))
+        {
+            HeaderSegments.Add(new TextSegment("", false));
+            return;
+        }
+
+        if (string.IsNullOrEmpty(searchText))
+        {
+            HeaderSegments.Add(new TextSegment(Header, false));
+            return;
+        }
+
+        string lower = Header.ToLowerInvariant();
+        string searchLower = searchText.ToLowerInvariant();
+        int startIndex = 0;
+        int matchIndex;
+
+        while ((matchIndex = lower.IndexOf(searchLower, startIndex, StringComparison.OrdinalIgnoreCase)) >= 0)
+        {
+            if (matchIndex > startIndex)
+            {
+                HeaderSegments.Add(new TextSegment(Header.Substring(startIndex, matchIndex - startIndex), false));
+            }
+
+            HeaderSegments.Add(new TextSegment(Header.Substring(matchIndex, searchText.Length), true));
+            startIndex = matchIndex + searchText.Length;
+        }
+
+        if (startIndex < Header.Length)
+        {
+            HeaderSegments.Add(new TextSegment(Header.Substring(startIndex), false));
+        }
+    }
 
     public override string ToString()
     {

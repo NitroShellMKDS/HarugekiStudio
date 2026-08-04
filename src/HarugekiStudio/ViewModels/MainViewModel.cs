@@ -6,6 +6,8 @@ using Harugeki.Formats;
 using HarugekiStudio.Rendering;
 using HarugekiStudio.Services;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.Threading;
 
 namespace HarugekiStudio.ViewModels;
 
@@ -20,19 +22,30 @@ public partial class MainViewModel : ObservableObject
     private const int MaxConsoleLines = 500;
     private readonly IAppStorageProvider _storageProvider;
     private readonly List<OpenArchive> _open = [];
+    private CancellationTokenSource? _searchCts;
 
     [ObservableProperty] private TreeItemViewModel? _selectedItem;
     [ObservableProperty] private RingModel? _viewportModel;
     [ObservableProperty] private string _searchFilter = "";
+    [ObservableProperty] private bool _isSearchActive;
+    [ObservableProperty] private int _matchCount;
     [ObservableProperty] private string _textureCaption = "";
     [ObservableProperty] private int _selectedPane;
     [ObservableProperty] private ShadingMode _shading = ShadingMode.Textured;
     [ObservableProperty] private string _status = "Open a .bin archive to begin.";
 
     public ObservableCollection<TreeItemViewModel> Roots { get; } = [];
+    public ObservableCollection<TreeItemViewModel> SearchResults { get; } = [];
     public ObservableCollection<PropertyRow> Properties { get; } = [];
     public ObservableCollection<string> Console { get; } = [];
     public Array ShadingModes { get; } = Enum.GetValues<ShadingMode>();
+
+    public ObservableCollection<TreeItemViewModel> CurrentItems => IsSearchActive ? SearchResults : Roots;
+
+    partial void OnIsSearchActiveChanged(bool value)
+    {
+        OnPropertyChanged(nameof(CurrentItems));
+    }
 
     public MainViewModel(IAppStorageProvider storageProvider)
     {
@@ -57,37 +70,143 @@ public partial class MainViewModel : ObservableObject
 
     partial void OnSearchFilterChanged(string value)
     {
-        ApplySearchFilter();
-    }
+        _searchCts?.Cancel();
+        _searchCts = new CancellationTokenSource();
 
-    private void ApplySearchFilter()
-    {
-        if (string.IsNullOrWhiteSpace(SearchFilter))
+        if (string.IsNullOrWhiteSpace(value))
         {
+            IsSearchActive = false;
+            MatchCount = 0;
+            SearchResults.Clear();
+            ClearAllHighlights();
+            Status = "Ready.";
             return;
         }
 
-        string lower = SearchFilter.ToLowerInvariant();
-        foreach (TreeItemViewModel item in Roots)
+        _ = DebouncedSearchAsync(value, _searchCts.Token);
+    }
+
+    private async Task DebouncedSearchAsync(string searchText, CancellationToken token)
+    {
+        try
         {
-            item.IsExpanded = true;
-            _ = ExpandMatching(item, lower);
+            await Task.Delay(200, token);
+            if (token.IsCancellationRequested) return;
+
+            Status = "Searching...";
+            var sw = Stopwatch.StartNew();
+
+            var (results, totalMatches) = await Task.Run(() =>
+            {
+                int matches = 0;
+                var list = new List<SearchResultDto>();
+
+                foreach (TreeItemViewModel root in Roots)
+                {
+                    token.ThrowIfCancellationRequested();
+                    int rootMatches = 0;
+                    var filtered = BuildFilteredTree(root, ref rootMatches, searchText, token);
+                    if (filtered is not null)
+                    {
+                        list.Add(filtered);
+                        matches += rootMatches;
+                    }
+                }
+
+                return (list, matches);
+            }, token);
+
+            token.ThrowIfCancellationRequested();
+
+            SearchResults.Clear();
+            IsSearchActive = true;
+            MatchCount = totalMatches;
+
+            foreach (var dto in results)
+            {
+                SearchResults.Add(CreateViewModel(dto, searchText));
+            }
+
+            Status = totalMatches == 0
+                ? "No matches found."
+                : $"Found {totalMatches} match{(totalMatches == 1 ? "" : "es")} in {sw.ElapsedMilliseconds}ms.";
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded by newer input
         }
     }
 
-    private static bool ExpandMatching(TreeItemViewModel item, string lower)
+    private SearchResultDto? BuildFilteredTree(TreeItemViewModel item, ref int totalMatches, string searchText, CancellationToken token)
     {
-        bool anyMatch = false;
+        token.ThrowIfCancellationRequested();
+
+        lock (item.LoadLock)
+        {
+            item.EnsureLoaded();
+
+            bool selfMatches = item.Header.IndexOf(searchText, StringComparison.OrdinalIgnoreCase) >= 0;
+            var matchingChildren = new List<SearchResultDto>();
+
+            foreach (TreeItemViewModel child in item.Children)
+            {
+                token.ThrowIfCancellationRequested();
+                int childMatches = 0;
+                var filteredChild = BuildFilteredTree(child, ref childMatches, searchText, token);
+                if (filteredChild is not null)
+                {
+                    matchingChildren.Add(filteredChild);
+                    totalMatches += childMatches;
+                }
+            }
+
+            if (selfMatches)
+            {
+                totalMatches++;
+            }
+
+            if (selfMatches || matchingChildren.Count > 0)
+            {
+                return new SearchResultDto(item.Header, item.Detail, item.Kind, item.Payload, matchingChildren);
+            }
+
+            return null;
+        }
+    }
+
+    private TreeItemViewModel CreateViewModel(SearchResultDto dto, string searchText)
+    {
+        var vm = new TreeItemViewModel(dto.Header, dto.Detail, dto.Kind)
+        {
+            Payload = dto.Payload,
+            IsExpanded = true,
+        };
+        vm.UpdateSearchHighlight(searchText);
+        foreach (var child in dto.Children)
+        {
+            vm.Children.Add(CreateViewModel(child, searchText));
+        }
+        return vm;
+    }
+
+    private void ClearAllHighlights()
+    {
+        foreach (TreeItemViewModel root in Roots)
+        {
+            ClearAllHighlightsRecursive(root);
+        }
+    }
+
+    private void ClearAllHighlightsRecursive(TreeItemViewModel item)
+    {
+        item.UpdateSearchHighlight(null);
         foreach (TreeItemViewModel child in item.Children)
         {
-            if (ExpandMatching(child, lower) || child.Header.Contains(lower, StringComparison.OrdinalIgnoreCase))
-            {
-                child.IsExpanded = true;
-                anyMatch = true;
-            }
+            ClearAllHighlightsRecursive(child);
         }
-        return anyMatch;
     }
+
+    private sealed record SearchResultDto(string Header, string Detail, string Kind, object? Payload, List<SearchResultDto> Children);
 
     private void Log(string line)
     {
@@ -216,6 +335,16 @@ public partial class MainViewModel : ObservableObject
     /// <summary>Opens an archive by path; also used for command-line arguments.</summary>
     public void OpenPath(string path)
     {
+        if (_open.Count > 0)
+        {
+            Roots.Clear();
+            _open.Clear();
+            Properties.Clear();
+            ViewportModel = null;
+            TexturePreview = null;
+            SearchFilter = "";
+        }
+
         try
         {
             RingArchive archive = RingArchive.Load(path);
@@ -240,6 +369,7 @@ public partial class MainViewModel : ObservableObject
         Properties.Clear();
         ViewportModel = null;
         TexturePreview = null;
+        SearchFilter = "";
         Log("Closed all archives.");
     }
 

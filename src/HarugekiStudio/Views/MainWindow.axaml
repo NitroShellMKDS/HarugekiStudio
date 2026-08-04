@@ -50,7 +50,7 @@
           <TextBox DockPanel.Dock="Top" Name="SearchBox"
                    Text="{Binding SearchFilter, Mode=TwoWay}"
                    PlaceholderText="Search" Margin="6,0,6,6" Height="26" FontSize="12" />
-          <TreeView ItemsSource="{Binding Roots}"
+          <TreeView ItemsSource="{Binding CurrentItems}"
                     SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
                     Background="Transparent" BorderThickness="0">
             <TreeView.Styles>
@@ -63,7 +63,20 @@
                 <StackPanel Orientation="Horizontal" Spacing="6">
                   <Border Width="8" Height="8" CornerRadius="2" VerticalAlignment="Center"
                           Background="{Binding Colour}" />
-                  <TextBlock Text="{Binding Header}" Foreground="#EEE" />
+                  <ItemsControl ItemsSource="{Binding HeaderSegments}">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate>
+                        <StackPanel Orientation="Horizontal" />
+                      </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <TextBlock Text="{Binding Text}" 
+                                   Foreground="{Binding IsHighlight, Converter={StaticResource HighlightBrushConverter}}"
+                                   FontWeight="{Binding IsHighlight, Converter={StaticResource HighlightWeightConverter}}" />
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
                   <TextBlock Text="{Binding Detail}" Foreground="#777" FontSize="11"
                              VerticalAlignment="Center" />
                 </StackPanel>
