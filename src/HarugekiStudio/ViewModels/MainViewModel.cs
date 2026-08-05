@@ -480,7 +480,12 @@ public partial class MainViewModel : ObservableObject
         Properties.Clear();
         Row("Format", AssetTypes.IsOgg(audio.Node.Span) ? "OGG Vorbis" : "WAV");
 
-        if (audio.Node.Span.Length > 0 && TryParseWav(audio.Node.Span, out int sampleRate, out int channels, out int bitsPerSample, out int dataOffset, out int dataLength))
+        int sampleRate = 0, channels = 0, bitsPerSample = 0, dataOffset = 0, dataLength = 0;
+        bool parsed = AssetTypes.IsOgg(audio.Node.Span)
+            ? TryParseOgg(audio.Node.Span, out sampleRate, out channels, out bitsPerSample, out dataOffset, out dataLength)
+            : TryParseWav(audio.Node.Span, out sampleRate, out channels, out bitsPerSample, out dataOffset, out dataLength);
+
+        if (parsed)
         {
             int totalSamples = dataLength / (bitsPerSample / 8);
             Row("Sample rate", $"{sampleRate:N0} Hz");
@@ -529,6 +534,67 @@ public partial class MainViewModel : ObservableObject
         }
 
         return sampleRate > 0 && channels > 0 && (bitsPerSample == 8 || bitsPerSample == 16) && dataLength > 0;
+    }
+
+    private static bool TryParseOgg(ReadOnlySpan<byte> data, out int sampleRate, out int channels, out int bitsPerSample, out int dataOffset, out int dataLength)
+    {
+        sampleRate = channels = bitsPerSample = dataOffset = dataLength = 0;
+
+        int pos = 0;
+        bool foundIdHeader = false;
+        ulong totalSamplesPerChannel = 0;
+
+        while (pos <= data.Length - 27)
+        {
+            if (data[pos] != (byte)'O' || data[pos + 1] != (byte)'g' || data[pos + 2] != (byte)'g' || data[pos + 3] != (byte)'S')
+            {
+                pos++;
+                continue;
+            }
+
+            byte headerType = data[pos + 5];
+            ulong granulePos = BitConverter.ToUInt64(data.Slice(pos + 6));
+            int numSegments = data[pos + 26];
+            int segTableStart = pos + 27;
+            int packetDataStart = segTableStart + numSegments;
+
+            if (packetDataStart > data.Length) break;
+
+            if (!foundIdHeader && granulePos == 0 && (headerType & 0x02) != 0)
+            {
+                if (packetDataStart + 30 <= data.Length)
+                {
+                    if (data[packetDataStart] == 0x01 && data[packetDataStart + 1] == (byte)'v' && data[packetDataStart + 2] == (byte)'o' &&
+                        data[packetDataStart + 3] == (byte)'r' && data[packetDataStart + 4] == (byte)'b' && data[packetDataStart + 5] == (byte)'i' &&
+                        data[packetDataStart + 6] == (byte)'s')
+                    {
+                        channels = data[packetDataStart + 11];
+                        sampleRate = BitConverter.ToInt32(data.Slice(packetDataStart + 12));
+                        bitsPerSample = 16;
+                        foundIdHeader = true;
+                    }
+                }
+            }
+
+            if ((headerType & 0x04) != 0)
+            {
+                totalSamplesPerChannel = granulePos;
+            }
+
+            int pageDataSize = 0;
+            for (int i = 0; i < numSegments; i++)
+            {
+                pageDataSize += data[segTableStart + i];
+            }
+            pos += 27 + numSegments + pageDataSize;
+        }
+
+        if (!foundIdHeader || sampleRate == 0 || channels == 0) return false;
+
+        long totalInterleavedSamples = (long)totalSamplesPerChannel * channels;
+        if (totalInterleavedSamples > (int.MaxValue / 2)) return false;
+        dataLength = (int)(totalInterleavedSamples * 2);
+        return true;
     }
 
     // ---- audio -----------------------------------------------------------

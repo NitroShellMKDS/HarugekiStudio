@@ -1,4 +1,5 @@
 using Silk.NET.OpenAL;
+using NVorbis;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -78,6 +79,11 @@ public sealed class AudioPlaybackService : IDisposable
                         throw new InvalidDataException("Invalid WAV data");
 
                     _decoder = new WavDecoder(data, dataOffset, dataLength, sampleRate, channels, _bitsPerSample);
+                }
+                else if (extension.Equals(".ogg", StringComparison.OrdinalIgnoreCase))
+                {
+                    _bitsPerSample = 16;
+                    _decoder = new OggVorbisDecoder(data);
                 }
                 else
                 {
@@ -600,5 +606,89 @@ public sealed class AudioPlaybackService : IDisposable
         }
 
         public void Dispose() { }
+    }
+
+    private sealed class OggVorbisDecoder : IAudioDecoder
+    {
+        private readonly VorbisReader _reader;
+        private short[] _pcm;
+        private long _position;
+
+        public int SampleRate { get; }
+        public int Channels { get; }
+        public int BitsPerSample => 16;
+        public long TotalSamples { get; private set; }
+        public int TotalBytes { get; private set; }
+
+        public long Position
+        {
+            get => _position;
+            set => _position = value < 0 ? 0 : value > TotalSamples ? TotalSamples : value;
+        }
+
+        public OggVorbisDecoder(byte[] data)
+        {
+            var stream = new System.IO.MemoryStream(data);
+            _reader = new VorbisReader(stream, false);
+
+            SampleRate = _reader.SampleRate;
+            Channels = _reader.Channels;
+            TotalSamples = _reader.TotalSamples * Channels;
+            TotalBytes = (int)(TotalSamples * 2);
+
+            _pcm = new short[TotalSamples];
+            float[] floatBuffer = new float[TotalSamples];
+            int read = _reader.ReadSamples(floatBuffer, 0, floatBuffer.Length);
+            if (read < floatBuffer.Length)
+            {
+                Array.Resize(ref _pcm, read);
+                TotalSamples = read;
+                TotalBytes = read * 2;
+            }
+
+            for (int i = 0; i < read; i++)
+            {
+                float sample = floatBuffer[i];
+                if (sample > 1.0f) sample = 1.0f;
+                else if (sample < -1.0f) sample = -1.0f;
+                _pcm[i] = (short)(sample * short.MaxValue);
+            }
+        }
+
+        public int Read(short[] buffer, int sampleCount)
+        {
+            int toRead = (int)Math.Min(sampleCount, TotalSamples - _position);
+            if (toRead <= 0) return 0;
+
+            Array.Copy(_pcm, _position, buffer, 0, toRead);
+            _position += toRead;
+            return toRead;
+        }
+
+        public int Read(byte[] buffer, int sampleCount)
+        {
+            int toRead = (int)Math.Min(sampleCount, TotalSamples - _position);
+            if (toRead <= 0) return 0;
+
+            int bytesToCopy = toRead * 2;
+            Buffer.BlockCopy(_pcm, (int)(_position * 2), buffer, 0, bytesToCopy);
+            _position += toRead;
+            return toRead;
+        }
+
+        public void ReadAll(byte[] destination)
+        {
+            Buffer.BlockCopy(_pcm, 0, destination, 0, TotalBytes);
+        }
+
+        public void Seek(long samplePosition)
+        {
+            _position = samplePosition < 0 ? 0 : samplePosition > TotalSamples ? TotalSamples : samplePosition;
+        }
+
+        public void Dispose()
+        {
+            _reader.Dispose();
+        }
     }
 }
