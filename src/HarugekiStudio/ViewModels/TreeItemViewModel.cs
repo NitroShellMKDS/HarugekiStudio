@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using Harugeki.Formats;
 using System.Collections.ObjectModel;
 
 namespace HarugekiStudio.ViewModels;
@@ -29,6 +30,7 @@ public partial class TreeItemViewModel : ObservableObject
 
     /// <summary>The domain object this row stands for, used to drive the panes.</summary>
     public object? Payload { get; init; }
+    public RingNode? Node { get; init; }
 
     public ObservableCollection<TreeItemViewModel> Children { get; } = [];
     public ObservableCollection<TextSegment> HeaderSegments { get; } = [];

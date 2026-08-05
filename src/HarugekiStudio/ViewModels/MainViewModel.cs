@@ -8,6 +8,7 @@ using HarugekiStudio.Rendering;
 using HarugekiStudio.Services;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Text;
 
 namespace HarugekiStudio.ViewModels;
 
@@ -63,7 +64,7 @@ public partial class MainViewModel : ObservableObject
             {
                 return $"{format} · {_audioPlayer.SampleRate} Hz · {_audioPlayer.Channels} ch · {_audioPlayer.SampleCount:N0} samples";
             }
-            return $"{format} · {TreeBuilder.Size(audio.Node.Length)}";
+            return format;
         }
     }
 
@@ -359,12 +360,14 @@ public partial class MainViewModel : ObservableObject
 
             case MeshAsset ms:
                 ShowModel(ms.Model);
-                Row("Mesh", ms.Mesh.Name);
+                Row("Name", ms.Mesh.Name);
                 Row("Triangles", ms.Mesh.TriangleCount);
                 Row("Draw vertices", ms.Mesh.VertexCount);
                 Row("Skin vertices", ms.Mesh.SkinPositions.Length / 3);
                 Row("Materials", string.Join(", ", ms.Mesh.Materials.Select(x => x.Name)));
                 Row("Per-mat tris", string.Join(", ", ms.Mesh.TriangleCounts));
+                Row("Offset", $"0x{ms.Node.Offset:X}");
+                Row("Size", TreeBuilder.Size(ms.Node.Length));
                 break;
 
             case TextureAsset t:
@@ -373,38 +376,44 @@ public partial class MainViewModel : ObservableObject
                 break;
 
             case RingBone b:
-                Row("Bone", b.Name);
+                Row("Name", b.Name);
                 Row("Node index", b.NodeIndex);
                 Row("Parent node", b.ParentNodeIndex);
                 Row("Weighted verts", b.Weights.Length);
+                Row("Offset", $"0x{value.Node!.Offset:X}");
+                Row("Size", TreeBuilder.Size(value.Node!.Length));
                 break;
 
             case RingMaterial mat:
-                Row("Material", mat.Name);
+                Row("Name", mat.Name);
                 Row("Texture index", mat.HasTexture ? mat.TextureIndex : "none");
                 Row("Colour", string.Join(", ", mat.Color.Select(c => c.ToString("0.###"))));
+                Row("Offset", $"0x{value.Node!.Offset:X}");
+                Row("Size", TreeBuilder.Size(value.Node!.Length));
                 break;
 
             case RingAnimation anim:
-                Row("Animation", anim.Name);
+                Row("Name", anim.Name);
                 Row("Frames", anim.Frames);
                 Row("Duration", $"{anim.Duration:0.00} s");
                 Row("Tracks", anim.Tracks.Count);
                 Row("Keys/track", anim.Tracks.Count > 0 ? anim.Tracks[0].Times.Length : 0);
+                Row("Offset", $"0x{value.Node!.Offset:X}");
+                Row("Size", TreeBuilder.Size(value.Node!.Length));
                 break;
 
             case RingNode node:
                 Row("Slot", node.PathText);
+                if (node.IsDirectory) Row("Children", node.Children.Count);
                 Row("Offset", $"0x{node.Offset:X}");
                 Row("Size", TreeBuilder.Size(node.Length));
-                Row("Kind", node.Kind.ToString());
-                if (node.IsDirectory) Row("Children", node.Children.Count);
                 break;
 
             case AudioAsset audio:
                 SelectedPane = 2;
                 ResetAudioState();
                 _ = LoadAudioAsync(audio);
+                ShowAudioProperties(audio);
                 break;
 
             case RingArchive archive:
@@ -430,12 +439,66 @@ public partial class MainViewModel : ObservableObject
         TexturePreview = ImageIO.ToBitmap(t);
         TextureCaption = $"{t.Name}   {t.Width} x {t.Height}   RGBA8";
         SelectedPane = 1;
-        Properties.Add(new PropertyRow("Texture", t.Name));
-        Properties.Add(new PropertyRow("Size", $"{t.Width} x {t.Height}"));
+        Properties.Add(new PropertyRow("Name", t.Name));
         Properties.Add(new PropertyRow("Format", "RGBA8 uncompressed"));
-        Properties.Add(new PropertyRow("Bytes", TreeBuilder.Size(t.Pixels.Length)));
-        Properties.Add(new PropertyRow("Source",
-            asset.Owner is null ? "archive entry" : $"embedded in {asset.Owner.Name}"));
+        Properties.Add(new PropertyRow("Offset", $"0x{asset.Node.Offset:X}"));
+        Properties.Add(new PropertyRow("Size", $"{t.Width} x {t.Height}"));
+    }
+
+    private void ShowAudioProperties(AudioAsset audio)
+    {
+        Properties.Clear();
+        Row("Format", AssetTypes.IsOgg(audio.Node.Span) ? "OGG Vorbis" : "WAV");
+
+        if (audio.Node.Span.Length > 0 && TryParseWav(audio.Node.Span, out int sampleRate, out int channels, out int bitsPerSample, out int dataOffset, out int dataLength))
+        {
+            int totalSamples = dataLength / (bitsPerSample / 8);
+            Row("Sample rate", $"{sampleRate:N0} Hz");
+            Row("Samples", $"{totalSamples:N0}");
+            Row("Bit depth", bitsPerSample == 8 ? "8-bit" : "16-bit");
+            Row("Channels", channels == 1 ? "Mono" : channels == 2 ? "Stereo" : channels.ToString());
+        }
+
+        Row("Offset", $"0x{audio.Node.Offset:X}");
+        Row("Size", TreeBuilder.Size(audio.Node.Length));
+
+        void Row(string name, object? v) => Properties.Add(new PropertyRow(name, v?.ToString() ?? ""));
+    }
+
+    private static bool TryParseWav(ReadOnlySpan<byte> data, out int sampleRate, out int channels, out int bitsPerSample, out int dataOffset, out int dataLength)
+    {
+        sampleRate = channels = bitsPerSample = dataOffset = dataLength = 0;
+
+        if (data.Length < 44) return false;
+        if (data[0] != (byte)'R' || data[1] != (byte)'I' || data[2] != (byte)'F' || data[3] != (byte)'F') return false;
+        if (data[8] != (byte)'W' || data[9] != (byte)'A' || data[10] != (byte)'V' || data[11] != (byte)'E') return false;
+
+        int offset = 12;
+        while (offset < data.Length - 8)
+        {
+            string chunkId = Encoding.ASCII.GetString(data.Slice(offset, 4));
+            int chunkSize = BitConverter.ToInt32(data.Slice(offset + 4));
+
+            if (chunkId == "fmt ")
+            {
+                if (chunkSize < 16) return false;
+                int audioFormat = BitConverter.ToUInt16(data.Slice(offset + 8));
+                if (audioFormat != 1) return false;
+                channels = BitConverter.ToUInt16(data.Slice(offset + 10));
+                sampleRate = BitConverter.ToInt32(data.Slice(offset + 12));
+                bitsPerSample = BitConverter.ToUInt16(data.Slice(offset + 22));
+            }
+            else if (chunkId == "data")
+            {
+                dataOffset = offset + 8;
+                dataLength = chunkSize;
+                break;
+            }
+
+            offset += 8 + chunkSize;
+        }
+
+        return sampleRate > 0 && channels > 0 && (bitsPerSample == 8 || bitsPerSample == 16) && dataLength > 0;
     }
 
     // ---- audio -----------------------------------------------------------

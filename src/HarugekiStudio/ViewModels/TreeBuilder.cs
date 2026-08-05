@@ -10,6 +10,7 @@ public static class TreeBuilder
         return new(name, Size(archive.Data.Length), "Container")
         {
             Payload = archive,
+            Node = archive.Root,
             Loader = () => ForNodeChildren(archive.Root),
         };
     }
@@ -35,13 +36,14 @@ public static class TreeBuilder
             AssetKind.Container => new TreeItemViewModel(header, detail, "Container")
             {
                 Payload = node,
+                Node = node,
                 Loader = () => ForNodeChildren(node),
             },
             AssetKind.Model => BuildModel(node, header, detail),
             AssetKind.Texture => BuildTexture(node, header),
             AssetKind.Animation => BuildAnimation(node, header),
             AssetKind.Audio => BuildAudio(node, header, detail),
-            _ => new TreeItemViewModel(header, detail + "  raw") { Payload = node },
+            _ => new TreeItemViewModel(header, detail + "  raw") { Payload = node, Node = node },
         };
     }
 
@@ -51,6 +53,7 @@ public static class TreeBuilder
         return new TreeItemViewModel($"{header} {model.Name}", detail, "Model")
         {
             Payload = new ModelAsset(node, model),
+            Node = node,
             Loader = () => ForModel(node, model),
         };
     }
@@ -61,6 +64,7 @@ public static class TreeBuilder
         return new TreeItemViewModel($"{header} {tex.Name}", $"{tex.Width}x{tex.Height}", "Texture")
         {
             Payload = new TextureAsset(node, tex),
+            Node = node,
         };
     }
 
@@ -71,6 +75,7 @@ public static class TreeBuilder
             $"{anim.Frames} frames, {anim.Tracks.Count} tracks", "Animation")
         {
             Payload = anim,
+            Node = node,
         };
     }
 
@@ -79,6 +84,7 @@ public static class TreeBuilder
         return new TreeItemViewModel(header, detail, "Audio")
         {
             Payload = new AudioAsset(node),
+            Node = node,
         };
     }
 
@@ -90,12 +96,13 @@ public static class TreeBuilder
                 m.Name, $"{m.TriangleCount} tris, {m.VertexCount} verts", "Mesh")
             {
                 Payload = new MeshAsset(node, model, m),
+                Node = node,
                 Loader = () => m.Materials.Select(mat => new TreeItemViewModel(
                     mat.Name,
                     mat.HasTexture && mat.TextureIndex < model.Textures.Count
                         ? model.Textures[(int)mat.TextureIndex].Name : "untextured",
                     "Material")
-                { Payload = mat }),
+                { Payload = mat, Node = node }),
             }),
         };
 
@@ -106,12 +113,12 @@ public static class TreeBuilder
                     mat.HasTexture && mat.TextureIndex < model.Textures.Count
                         ? model.Textures[(int)mat.TextureIndex].Name : "untextured",
                     "Material")
-                { Payload = mat }),
+                { Payload = mat, Node = node }),
         };
 
         yield return new TreeItemViewModel("Skeleton", $"{model.Bones.Count} bones")
         {
-            Loader = () => Skeleton(model),
+            Loader = () => Skeleton(model, node),
         };
 
         if (model.Textures.Count > 0)
@@ -120,13 +127,13 @@ public static class TreeBuilder
             {
                 Loader = () => model.Textures.Select((t, i) => new TreeItemViewModel(
                     t.Name, $"{t.Width}x{t.Height}", "Texture")
-                { Payload = new TextureAsset(node, t, model, i) }),
+                { Payload = new TextureAsset(node, t, model, i), Node = node }),
             };
         }
     }
 
     /// <summary>Nests bones by parent index (parent = Related - 1).</summary>
-    private static IEnumerable<TreeItemViewModel> Skeleton(RingModel model)
+    private static IEnumerable<TreeItemViewModel> Skeleton(RingModel model, RingNode node)
     {
         Dictionary<int, RingBone> byNode = model.Bones.ToDictionary(b => b.NodeIndex);
         Dictionary<int, List<RingBone>> children = model.Bones
@@ -139,11 +146,12 @@ public static class TreeBuilder
             new TreeItemViewModel(bone.Name, $"{bone.Weights.Length} weights", "Bone")
             {
                 Payload = bone,
+                Node = node,
                 Loader = children.TryGetValue(bone.NodeIndex, out List<RingBone>? kids)
                     ? () => kids.SelectMany(Build)
                     : null,
             },
-        ];
+            ];
         }
 
         return model.Bones.Where(b => !byNode.ContainsKey(b.ParentNodeIndex)).SelectMany(Build);
