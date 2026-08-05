@@ -19,7 +19,8 @@ public sealed class AudioPlaybackService : IDisposable
 
     private bool _isPlaying;
     private bool _isPaused;
-    private long _samplesPlayed;
+    private DateTime _playStartTime;
+    private double _playStartSeconds;
 
     public bool IsLoaded => _isLoaded;
     public bool CanPlay => _isLoaded && !_isPlaying && !_isPaused;
@@ -33,7 +34,13 @@ public sealed class AudioPlaybackService : IDisposable
         {
             if (_decoder == null || _decoder.SampleRate == 0 || _decoder.Channels == 0)
                 return TimeSpan.Zero;
-            return TimeSpan.FromSeconds((double)_samplesPlayed / (_decoder.SampleRate * _decoder.Channels));
+
+            if (!_isPlaying)
+                return TimeSpan.FromSeconds(_playStartSeconds);
+
+            var elapsed = (DateTime.UtcNow - _playStartTime).TotalSeconds;
+            var current = _playStartSeconds + elapsed;
+            return TimeSpan.FromSeconds(Math.Max(0, Math.Min(current, TotalTime.TotalSeconds)));
         }
     }
     public TimeSpan TotalTime
@@ -97,7 +104,8 @@ public sealed class AudioPlaybackService : IDisposable
             _al.GetError();
 
             _isLoaded = true;
-            _samplesPlayed = 0;
+            _playStartSeconds = 0;
+            _playStartTime = default;
             _isPlaying = false;
             _isPaused = false;
 
@@ -130,11 +138,12 @@ public sealed class AudioPlaybackService : IDisposable
                     _context?.Process();
                     _al.SourcePlay(_source);
                     _isPaused = false;
+                    _playStartTime = DateTime.UtcNow;
                 }
                 else
                 {
                     _decoder?.Seek(0);
-                    _samplesPlayed = 0;
+                    _playStartSeconds = 0;
 
                     _al.SourceStop(_source);
                     _al.GetSourceProperty(_source, GetSourceInteger.BuffersQueued, out int queued);
@@ -146,6 +155,7 @@ public sealed class AudioPlaybackService : IDisposable
 
                     _al.SourceQueueBuffers(_source, new[] { _buffer });
                     _al.SourcePlay(_source);
+                    _playStartTime = DateTime.UtcNow;
                 }
 
                 _al.GetError();
@@ -175,6 +185,7 @@ public sealed class AudioPlaybackService : IDisposable
                 _context?.Suspend();
                 _al.GetError();
 
+                _playStartSeconds = CurrentTime.TotalSeconds;
                 _isPlaying = false;
                 _isPaused = true;
                 StopUiTimerLocked();
@@ -204,6 +215,7 @@ public sealed class AudioPlaybackService : IDisposable
 
                 _isPaused = false;
                 _isPlaying = true;
+                _playStartTime = DateTime.UtcNow;
                 StartUiTimerLocked();
                 StateChanged?.Invoke();
             }
@@ -230,7 +242,8 @@ public sealed class AudioPlaybackService : IDisposable
                 _al.GetError();
 
                 _decoder?.Seek(0);
-                _samplesPlayed = 0;
+                _playStartSeconds = 0;
+                _playStartTime = default;
 
                 _al.GetSourceProperty(_source, GetSourceInteger.BuffersQueued, out int queued);
                 if (queued > 0)
@@ -275,9 +288,7 @@ public sealed class AudioPlaybackService : IDisposable
                     _isPlaying = false;
                 }
 
-                long samplePosition = (long)(position.TotalSeconds * _decoder!.SampleRate * _decoder.Channels);
-                _decoder.Seek(samplePosition);
-                _samplesPlayed = samplePosition;
+                _playStartSeconds = position.TotalSeconds;
 
                 _al.GetSourceProperty(_source, GetSourceInteger.BuffersQueued, out int queued);
                 if (queued > 0)
@@ -295,6 +306,7 @@ public sealed class AudioPlaybackService : IDisposable
                     _al.SourcePlay(_source);
                     _al.GetError();
                     _isPlaying = true;
+                    _playStartTime = DateTime.UtcNow;
                     StartUiTimerLocked();
                 }
 
@@ -335,14 +347,11 @@ public sealed class AudioPlaybackService : IDisposable
         try
         {
             _context.MakeCurrent();
-            _al.GetSourceProperty(_source, GetSourceInteger.SampleOffset, out int offset);
-            _samplesPlayed = offset;
-
             _al.GetSourceProperty(_source, GetSourceInteger.SourceState, out int state);
             if ((SourceState)state == SourceState.Stopped)
             {
                 _isPlaying = false;
-                _samplesPlayed = 0;
+                _playStartSeconds = TotalTime.TotalSeconds;
                 StopUiTimerLocked();
 
                 _al.SourceStop(_source);
@@ -357,8 +366,6 @@ public sealed class AudioPlaybackService : IDisposable
 
                 _al.SourceQueueBuffers(_source, new[] { _buffer });
                 _al.GetError();
-
-                Avalonia.Threading.Dispatcher.UIThread.Post(() => StateChanged?.Invoke());
             }
         }
         catch
@@ -416,7 +423,8 @@ public sealed class AudioPlaybackService : IDisposable
         _isLoaded = false;
         _isPlaying = false;
         _isPaused = false;
-        _samplesPlayed = 0;
+        _playStartSeconds = 0;
+        _playStartTime = default;
         _bitsPerSample = 0;
     }
 

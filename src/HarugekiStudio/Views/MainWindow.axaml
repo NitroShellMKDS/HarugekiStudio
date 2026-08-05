@@ -156,7 +156,6 @@
                 <Slider Minimum="0" Maximum="{Binding AudioTotalSeconds}"
                         Value="{Binding AudioCurrentSeconds}"
                         IsEnabled="{Binding AudioIsLoaded}"
-                        ValueChanged="AudioSlider_ValueChanged"
                         Margin="0,8,0,0" />
                 <Button Content="Play" Command="{Binding PlayAudioCommand}"
                         IsEnabled="{Binding AudioCanPlay}"

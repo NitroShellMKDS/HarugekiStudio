@@ -72,9 +72,27 @@ public partial class MainViewModel : ObservableObject
     public bool AudioCanPlay => _audioPlayer.CanPlay;
     public bool AudioCanPauseOrResume => _audioPlayer.CanPause || _audioPlayer.CanResume;
     public bool AudioCanStop => _audioPlayer.CanStop;
-    public double AudioCurrentSeconds => _audioPlayer.CurrentTime.TotalSeconds;
     public double AudioTotalSeconds => _audioPlayer.TotalTime.TotalSeconds;
-    public string AudioTimeDisplay => $"{_audioPlayer.CurrentTime:mm\\:ss} / {_audioPlayer.TotalTime:mm\\:ss}";
+    public string AudioTimeDisplay => $"{_audioPlayer.CurrentTime:mm\\:ss\\.fff} / {_audioPlayer.TotalTime:mm\\:ss\\.fff}";
+
+    private bool _isSeeking;
+    public double AudioCurrentSeconds
+    {
+        get => _audioPlayer.CurrentTime.TotalSeconds;
+        set
+        {
+            if (_isSeeking) return;
+            _isSeeking = true;
+            try
+            {
+                SeekAudio(value);
+            }
+            finally
+            {
+                _isSeeking = false;
+            }
+        }
+    }
 
     [RelayCommand]
     private async Task PlayAudio()
@@ -129,8 +147,6 @@ public partial class MainViewModel : ObservableObject
             OnPropertyChanged(nameof(AudioCanPauseOrResume));
             OnPropertyChanged(nameof(AudioCanStop));
             OnPropertyChanged(nameof(AudioTotalSeconds));
-            OnPropertyChanged(nameof(AudioCurrentSeconds));
-            OnPropertyChanged(nameof(AudioTimeDisplay));
         }
         catch (Exception ex)
         {
@@ -158,9 +174,22 @@ public partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(AudioCanPlay));
         OnPropertyChanged(nameof(AudioCanPauseOrResume));
         OnPropertyChanged(nameof(AudioCanStop));
-        OnPropertyChanged(nameof(AudioCurrentSeconds));
         OnPropertyChanged(nameof(AudioTotalSeconds));
+    }
+
+    private void OnAudioPlayerStateChanged()
+    {
+        if (!Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
+        {
+            Avalonia.Threading.Dispatcher.UIThread.Post(() => OnAudioPlayerStateChanged());
+            return;
+        }
+
+        OnPropertyChanged(nameof(AudioCurrentSeconds));
         OnPropertyChanged(nameof(AudioTimeDisplay));
+        OnPropertyChanged(nameof(AudioCanPlay));
+        OnPropertyChanged(nameof(AudioCanPauseOrResume));
+        OnPropertyChanged(nameof(AudioCanStop));
     }
 
     partial void OnIsSearchActiveChanged(bool value) => OnPropertyChanged(nameof(CurrentItems));
@@ -168,6 +197,7 @@ public partial class MainViewModel : ObservableObject
     public MainViewModel(IAppStorageProvider storageProvider)
     {
         _storageProvider = storageProvider;
+        _audioPlayer.StateChanged += OnAudioPlayerStateChanged;
         Log("Harugeki Studio ready.");
     }
 

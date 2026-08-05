@@ -141,8 +141,4 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
-    private void AudioSlider_ValueChanged(object? sender, Avalonia.Controls.Primitives.RangeBaseValueChangedEventArgs e)
-    {
-        _currentVm?.SeekAudio(e.NewValue);
-    }
 }
