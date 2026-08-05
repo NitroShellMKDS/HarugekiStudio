@@ -40,6 +40,7 @@ public static class TreeBuilder
             AssetKind.Model => BuildModel(node, header, detail),
             AssetKind.Texture => BuildTexture(node, header),
             AssetKind.Animation => BuildAnimation(node, header),
+            AssetKind.Audio => BuildAudio(node, header, detail),
             _ => new TreeItemViewModel(header, detail + "  raw") { Payload = node },
         };
     }
@@ -70,6 +71,14 @@ public static class TreeBuilder
             $"{anim.Frames} frames, {anim.Tracks.Count} tracks", "Animation")
         {
             Payload = anim,
+        };
+    }
+
+    private static TreeItemViewModel BuildAudio(RingNode node, string header, string detail)
+    {
+        return new TreeItemViewModel(header, detail, "Audio")
+        {
+            Payload = new AudioAsset(node),
         };
     }
 

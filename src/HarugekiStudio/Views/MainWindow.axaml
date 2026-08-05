@@ -57,10 +57,12 @@
                 <Setter Property="ContextMenu">
                   <ContextMenu DataContext="{Binding DataContext, ElementName=RootWindow}" x:DataType="vm:MainViewModel">
                     <MenuItem Header="Extract Raw" Command="{Binding ExtractRawCommand}" IsVisible="{Binding IsExtractRawVisible}" />
+                    <MenuItem Header="Extract" Command="{Binding ExtractCommand}" IsVisible="{Binding IsExtractVisible}" />
                     <MenuItem Header="Export" Command="{Binding ExportCommand}" IsVisible="{Binding IsExportVisible}" />
                     <Separator />
                     <MenuItem Header="Replace Raw" Command="{Binding ReplaceRawCommand}" IsVisible="{Binding IsReplaceRawVisible}" />
                     <MenuItem Header="Replace" Command="{Binding ReplaceTextureCommand}" IsVisible="{Binding IsReplaceVisible}" />
+                    <MenuItem Header="Replace" Command="{Binding ReplaceAudioCommand}" IsVisible="{Binding IsReplaceAudioVisible}" />
                   </ContextMenu>
                 </Setter>
               </Style>
@@ -141,6 +143,33 @@
                        Stretch="None" HorizontalAlignment="Center"
                        VerticalAlignment="Center" Margin="12" />
               </ScrollViewer>
+            </DockPanel>
+          </TabItem>
+          <TabItem Header="Audio">
+            <DockPanel Background="#141414">
+              <Border DockPanel.Dock="Top" Background="#222" Padding="8,4">
+                <TextBlock Text="{Binding AudioStatus}" Foreground="#CCC" />
+              </Border>
+              <StackPanel Margin="12" Spacing="16">
+                <TextBlock Text="{Binding AudioTimeDisplay}" Foreground="#CCC"
+                           HorizontalAlignment="Center" FontSize="14" Margin="0,20,0,0" />
+                <Slider Minimum="0" Maximum="{Binding AudioTotalSeconds}"
+                        Value="{Binding AudioCurrentSeconds, Mode=TwoWay}"
+                        IsEnabled="{Binding AudioIsLoaded}"
+                        Margin="0,8,0,0" />
+                <Button Content="Play" Command="{Binding PlayAudioCommand}"
+                        IsEnabled="{Binding AudioCanPlay}"
+                        HorizontalAlignment="Center" HorizontalContentAlignment="Center"
+                        MinWidth="80" Margin="0,0,0,8" />
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="10">
+                  <Button Content="Pause/Resume" Command="{Binding PauseResumeAudioCommand}"
+                          IsEnabled="{Binding AudioCanPauseOrResume}"
+                          HorizontalContentAlignment="Center" MinWidth="100" />
+                  <Button Content="Stop" Command="{Binding StopAudioCommand}"
+                          IsEnabled="{Binding AudioCanStop}"
+                          HorizontalContentAlignment="Center" MinWidth="80" />
+                </StackPanel>
+              </StackPanel>
             </DockPanel>
           </TabItem>
         </TabControl>

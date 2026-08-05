@@ -3,21 +3,48 @@ using System.Text;
 
 namespace Harugeki.Formats;
 
-public enum AssetKind { Unknown, Container, Texture, Model, Animation }
+public enum AssetKind { Unknown, Container, Texture, Model, Animation, Audio }
 
 public static class AssetTypes
 {
-    /// <summary>
-    /// Classifies a payload. Used as the container walk's stop-predicate, so it
-    /// must be cheap and must never mistake a table of contents for an asset.
-    /// </summary>
     public static AssetKind Detect(ReadOnlySpan<byte> blob)
     {
         return RingTexture.IsTexture(blob)
             ? AssetKind.Texture
             : RingModel.LooksLikeModel(blob)
             ? AssetKind.Model
-            : RingAnimation.LooksLikeAnimation(blob) ? AssetKind.Animation : AssetKind.Unknown;
+            : RingAnimation.LooksLikeAnimation(blob)
+            ? AssetKind.Animation
+            : IsAudio(blob)
+            ? AssetKind.Audio
+            : AssetKind.Unknown;
+    }
+
+    public static bool IsAudio(ReadOnlySpan<byte> blob)
+    {
+        return IsOgg(blob) || IsWav(blob);
+    }
+
+    public static bool IsOgg(ReadOnlySpan<byte> blob)
+    {
+        return blob.Length >= 4
+            && blob[0] == 0x4F
+            && blob[1] == 0x67
+            && blob[2] == 0x67
+            && blob[3] == 0x53;
+    }
+
+    public static bool IsWav(ReadOnlySpan<byte> blob)
+    {
+        return blob.Length >= 12
+            && blob[0] == 0x52
+            && blob[1] == 0x49
+            && blob[2] == 0x46
+            && blob[3] == 0x46
+            && blob[8] == 0x57
+            && blob[9] == 0x41
+            && blob[10] == 0x56
+            && blob[11] == 0x45;
     }
 
     internal static string ReadName(ReadOnlySpan<byte> blob, int offset, int max)

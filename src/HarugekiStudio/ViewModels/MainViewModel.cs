@@ -1,5 +1,6 @@
 using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Harugeki.Formats;
@@ -44,9 +45,38 @@ public partial class MainViewModel : ObservableObject
     public ObservableCollection<TreeItemViewModel> CurrentItems => IsSearchActive ? SearchResults : Roots;
 
     public bool IsExtractRawVisible => SelectedItem?.Payload is RingNode or ModelAsset or TextureAsset;
+    public bool IsExtractVisible => SelectedItem?.Payload is AudioAsset;
     public bool IsExportVisible => SelectedItem?.Payload is ModelAsset or MeshAsset or TextureAsset;
     public bool IsReplaceRawVisible => SelectedItem?.Payload is RingNode or ModelAsset or TextureAsset;
     public bool IsReplaceVisible => SelectedItem?.Payload is TextureAsset;
+    public bool IsReplaceAudioVisible => SelectedItem?.Payload is AudioAsset;
+
+    public string AudioStatus
+    {
+        get
+        {
+            if (SelectedItem?.Payload is not AudioAsset audio) return "No audio selected";
+            string format = AssetTypes.IsOgg(audio.Node.Span) ? "OGG Vorbis" : "WAV";
+            return $"{format} · {TreeBuilder.Size(audio.Node.Length)}";
+        }
+    }
+
+    public bool AudioIsLoaded => false;
+    public bool AudioCanPlay => false;
+    public bool AudioCanPauseOrResume => false;
+    public bool AudioCanStop => false;
+    public double AudioCurrentSeconds => 0;
+    public double AudioTotalSeconds => 0;
+    public string AudioTimeDisplay => "00:00 / 00:00";
+
+    [RelayCommand]
+    private void PlayAudio() { }
+
+    [RelayCommand]
+    private void PauseResumeAudio() { }
+
+    [RelayCommand]
+    private void StopAudio() { }
 
     partial void OnIsSearchActiveChanged(bool value) => OnPropertyChanged(nameof(CurrentItems));
 
@@ -214,9 +244,12 @@ public partial class MainViewModel : ObservableObject
     partial void OnSelectedItemChanged(TreeItemViewModel? value)
     {
         OnPropertyChanged(nameof(IsExtractRawVisible));
+        OnPropertyChanged(nameof(IsExtractVisible));
         OnPropertyChanged(nameof(IsExportVisible));
         OnPropertyChanged(nameof(IsReplaceRawVisible));
         OnPropertyChanged(nameof(IsReplaceVisible));
+        OnPropertyChanged(nameof(IsReplaceAudioVisible));
+        OnPropertyChanged(nameof(AudioStatus));
 
         Properties.Clear();
         if (value is null) return;
@@ -232,6 +265,7 @@ public partial class MainViewModel : ObservableObject
                 Row("Embedded textures", m.Model.Textures.Count);
                 Row("Offset", $"0x{m.Node.Offset:X}");
                 Row("Size", TreeBuilder.Size(m.Node.Length));
+                SelectedPane = 0;
                 break;
 
             case MeshAsset ms:
@@ -246,6 +280,7 @@ public partial class MainViewModel : ObservableObject
 
             case TextureAsset t:
                 ShowTexture(t);
+                SelectedPane = 1;
                 break;
 
             case RingBone b:
@@ -275,6 +310,13 @@ public partial class MainViewModel : ObservableObject
                 Row("Size", TreeBuilder.Size(node.Length));
                 Row("Kind", node.Kind.ToString());
                 if (node.IsDirectory) Row("Children", node.Children.Count);
+                break;
+
+            case AudioAsset audio:
+                SelectedPane = 2;
+                Row("Audio", AssetTypes.IsOgg(audio.Node.Span) ? "OGG Vorbis" : "WAV");
+                Row("Offset", $"0x{audio.Node.Offset:X}");
+                Row("Size", TreeBuilder.Size(audio.Node.Length));
                 break;
 
             case RingArchive archive:
@@ -307,6 +349,8 @@ public partial class MainViewModel : ObservableObject
         Properties.Add(new PropertyRow("Source",
             asset.Owner is null ? "archive entry" : $"embedded in {asset.Owner.Name}"));
     }
+
+    // ---- audio -----------------------------------------------------------
 
     // ---- commands --------------------------------------------------------
     [RelayCommand]
@@ -465,6 +509,55 @@ public partial class MainViewModel : ObservableObject
         catch (Exception ex) { Log($"Extract raw failed: {ex.Message}"); }
     }
 
+    [RelayCommand]
+    private async Task ExtractAsync()
+    {
+        if (SelectedItem?.Payload is not AudioAsset audio)
+        {
+            Log("Select an audio node to extract.");
+            return;
+        }
+
+        RingNode node = audio.Node;
+        string extension = GetAudioExtension(node.Span);
+        string suggestedName = GetSuggestedRawName(SelectedItem!, node);
+        if (!suggestedName.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+        {
+            suggestedName += extension;
+        }
+
+        IStorageFile? file = await _storageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = $"Extract {node.PathText}",
+            SuggestedFileName = suggestedName,
+            DefaultExtension = extension.TrimStart('.'),
+            FileTypeChoices = [new FilePickerFileType($"{extension.TrimStart('.').ToUpperInvariant()} audio") { Patterns = ["*" + extension] }],
+        });
+        if (file is null)
+        {
+            return;
+        }
+
+        try
+        {
+            string? path = file.TryGetLocalPath();
+            if (path is null)
+            {
+                return;
+            }
+
+            byte[] data = node.GetPayload();
+            File.WriteAllBytes(path, data);
+            Log($"Extracted {node.PathText} ({TreeBuilder.Size(data.Length)}) to {Path.GetFileName(path)}.");
+        }
+        catch (Exception ex) { Log($"Extract failed: {ex.Message}"); }
+    }
+
+    private static string GetAudioExtension(ReadOnlySpan<byte> span)
+    {
+        return AssetTypes.IsOgg(span) ? ".ogg" : ".wav";
+    }
+
     private static string GetSuggestedRawName(TreeItemViewModel item, RingNode node)
     {
         string header = item.Header;
@@ -559,6 +652,62 @@ public partial class MainViewModel : ObservableObject
         catch (Exception ex) { Log($"Replace raw failed: {ex.Message}"); }
     }
 
+    [RelayCommand]
+    private async Task ReplaceAudioAsync()
+    {
+        if (SelectedItem?.Payload is not AudioAsset audio)
+        {
+            Log("Select an audio node to replace.");
+            return;
+        }
+
+        RingNode node = audio.Node;
+        string extension = GetAudioExtension(node.Span);
+        string filterLabel = extension == ".ogg" ? "OGG audio" : "WAV audio";
+
+        IReadOnlyList<IStorageFile> files = await _storageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = $"Replace {node.PathText}",
+            AllowMultiple = false,
+            FileTypeFilter = [new FilePickerFileType(filterLabel) { Patterns = ["*" + extension] }],
+        });
+        if (files.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            string? path = files[0].TryGetLocalPath();
+            if (path is null)
+            {
+                return;
+            }
+
+            byte[] data = File.ReadAllBytes(path);
+            if (data.Length > node.Length)
+            {
+                Log($"Replace failed: file ({TreeBuilder.Size(data.Length)}) exceeds slot size ({TreeBuilder.Size(node.Length)}).");
+                return;
+            }
+
+            if (data.Length < node.Length)
+            {
+                byte[] padded = new byte[node.Length];
+                data.CopyTo(padded, 0);
+                data = padded;
+            }
+
+            node.Replace(data);
+
+            OpenArchive? owner = _open.FirstOrDefault(o => ReferenceEquals(o.Archive, node.Archive));
+            owner?.Dirty = true;
+
+            Log($"Replaced {node.PathText} with {Path.GetFileName(path)} ({TreeBuilder.Size(data.Length)}). Use File > Save to write back.");
+        }
+        catch (Exception ex) { Log($"Replace failed: {ex.Message}"); }
+    }
+
     private static RingNode? GetNodeFromPayload(object? payload)
     {
         return payload switch
@@ -566,6 +715,7 @@ public partial class MainViewModel : ObservableObject
             RingNode node => node,
             ModelAsset m => m.Node,
             TextureAsset t => t.Node,
+            AudioAsset a => a.Node,
             _ => null,
         };
     }

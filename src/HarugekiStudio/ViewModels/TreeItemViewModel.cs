@@ -96,6 +96,7 @@ public partial class TreeItemViewModel : ObservableObject
         "Model" => "#7FD4FF",
         "Texture" => "#FFD479",
         "Animation" => "#C7A0FF",
+        "Audio" => "#7FE3A8",
         "Mesh" => "#8FE388",
         "Material" => "#FF9EC4",
         "Bone" => "#B0B0B0",

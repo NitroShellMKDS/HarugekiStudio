@@ -7,6 +7,7 @@ public sealed record TextSegment(string Text, bool IsHighlight);
 /// <summary>Pairs a decoded asset with the container node it came from.</summary>
 public sealed record ModelAsset(RingNode Node, RingModel Model);
 public sealed record MeshAsset(RingNode Node, RingModel Model, RingMesh Mesh);
+public sealed record AudioAsset(RingNode Node);
 
 /// <summary>
 /// A texture and the route back to its bytes. An archive-entry texture is replaced
