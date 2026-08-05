@@ -59,6 +59,10 @@ public class GlViewport : OpenGlControlBase
     private int _program, _vao, _lineVao, _vbo, _lineVbo, _white;
     private int _uMvp, _uView, _uMode, _uHasTex, _uTex;
     private int _vertexCount, _lineVertexCount;
+    private int _gridProgram, _gridVao, _gridVbo, _gridMvp, _gridColor;
+    private int _gridVertexCount;
+    private int _axisProgram, _axisVao, _axisVbo, _axisMvp;
+    private int _axisVertexCount;
     private readonly List<(int First, int Count, int Texture)> _batches = [];
     private readonly List<int> _textures = [];
     private bool _ready;
@@ -69,6 +73,10 @@ public class GlViewport : OpenGlControlBase
 
     private static readonly System.Reflection.MethodInfo? s_uniformMatrix4fv =
         typeof(GlInterface).GetMethod("UniformMatrix4fv",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+
+    private static readonly System.Reflection.MethodInfo? s_uniform4f =
+        typeof(GlInterface).GetMethod("Uniform4f",
             System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
 
     public GlViewport()
@@ -171,6 +179,40 @@ public class GlViewport : OpenGlControlBase
         _vbo = gl.GenBuffer();
         _lineVbo = gl.GenBuffer();
         _white = MakeSolidTexture(gl, 0xFFFFFFFF);
+
+        _gridVao = gl.GenVertexArray();
+        _gridVbo = gl.GenBuffer();
+        int gvs = gl.CreateShader(GL_VERTEX_SHADER);
+        Check(gl.CompileShaderAndGetError(gvs, head + GridVertexSource), "grid vertex shader");
+        int gfs = gl.CreateShader(GL_FRAGMENT_SHADER);
+        Check(gl.CompileShaderAndGetError(gfs, head + GridFragmentSource), "grid fragment shader");
+        _gridProgram = gl.CreateProgram();
+        gl.AttachShader(_gridProgram, gvs);
+        gl.AttachShader(_gridProgram, gfs);
+        Check(gl.LinkProgramAndGetError(_gridProgram), "grid program link");
+        gl.DeleteShader(gvs);
+        gl.DeleteShader(gfs);
+        _gridMvp = gl.GetUniformLocationString(_gridProgram, "uMvp");
+        _gridColor = gl.GetUniformLocationString(_gridProgram, "uColor");
+
+        BuildGrid(gl);
+
+        _axisVao = gl.GenVertexArray();
+        _axisVbo = gl.GenBuffer();
+        int avs = gl.CreateShader(GL_VERTEX_SHADER);
+        Check(gl.CompileShaderAndGetError(avs, head + AxisVertexSource), "axis vertex shader");
+        int afs = gl.CreateShader(GL_FRAGMENT_SHADER);
+        Check(gl.CompileShaderAndGetError(afs, head + AxisFragmentSource), "axis fragment shader");
+        _axisProgram = gl.CreateProgram();
+        gl.AttachShader(_axisProgram, avs);
+        gl.AttachShader(_axisProgram, afs);
+        Check(gl.LinkProgramAndGetError(_axisProgram), "axis program link");
+        gl.DeleteShader(avs);
+        gl.DeleteShader(afs);
+        _axisMvp = gl.GetUniformLocationString(_axisProgram, "uMvp");
+
+        BuildAxes(gl);
+
         _ready = true;
         _dirty = true;
         RequestNextFrameRendering();
@@ -190,10 +232,20 @@ public class GlViewport : OpenGlControlBase
         gl.DeleteVertexArray(_lineVao);
         gl.DeleteTexture(_white);
         gl.DeleteProgram(_program);
+        gl.DeleteBuffer(_gridVbo);
+        gl.DeleteVertexArray(_gridVao);
+        gl.DeleteProgram(_gridProgram);
+        gl.DeleteBuffer(_axisVbo);
+        gl.DeleteVertexArray(_axisVao);
+        gl.DeleteProgram(_axisProgram);
         _program = _vao = _lineVao = _vbo = _lineVbo = _white = 0;
         _uMvp = _uView = _uMode = _uHasTex = _uTex = 0;
         _vertexCount = _lineVertexCount = 0;
         _batches.Clear();
+        _gridProgram = _gridVao = _gridVbo = _gridMvp = _gridColor = 0;
+        _gridVertexCount = 0;
+        _axisProgram = _axisVao = _axisVbo = _axisMvp = 0;
+        _axisVertexCount = 0;
         _ready = false;
         _dirty = true;
     }
@@ -228,15 +280,35 @@ public class GlViewport : OpenGlControlBase
         gl.Disable(GL_CULL_FACE);
 
         if (_dirty) { Upload(gl); _dirty = false; }
-        if (_vertexCount == 0)
-        {
-            return;
-        }
 
         Matrix4x4 view = Matrix4x4.CreateLookAt(EyePosition(), _target, Vector3.UnitY);
         Matrix4x4 proj = Matrix4x4.CreatePerspectiveFieldOfView(
             0.9f, w / (float)h, MathF.Max(0.05f, _distance * 0.002f), (_distance * 20f) + 5000f);
         Matrix4x4 mvp = view * proj;
+
+        if (_gridVertexCount > 0)
+        {
+            gl.DepthMask(0);
+            gl.UseProgram(_gridProgram);
+            UniformMatrix(gl, _gridMvp, mvp);
+            Uniform4f(gl, _gridColor, 0.35f, 0.35f, 0.35f, 1f);
+            gl.BindVertexArray(_gridVao);
+            gl.DrawArrays(Gl.Lines, 0, _gridVertexCount);
+            gl.DepthMask(1);
+        }
+
+        if (_axisVertexCount > 0)
+        {
+            gl.UseProgram(_axisProgram);
+            UniformMatrix(gl, _axisMvp, mvp);
+            gl.BindVertexArray(_axisVao);
+            gl.DrawArrays(Gl.Lines, 0, _axisVertexCount);
+        }
+
+        if (_vertexCount == 0)
+        {
+            return;
+        }
 
         gl.UseProgram(_program);
         UniformMatrix(gl, _uMvp, mvp);
@@ -402,6 +474,66 @@ public class GlViewport : OpenGlControlBase
         _textures.Clear();
     }
 
+    private void BuildGrid(GlInterface gl)
+    {
+        const int range = 2000;
+        const int step = 20;
+        var positions = new List<float>(1700);
+
+        for (int x = -range; x <= range; x += step)
+        {
+            positions.Add(x); positions.Add(0); positions.Add(-range);
+            positions.Add(x); positions.Add(0); positions.Add(range);
+        }
+
+        for (int z = -range; z <= range; z += step)
+        {
+            positions.Add(-range); positions.Add(0); positions.Add(z);
+            positions.Add(range); positions.Add(0); positions.Add(z);
+        }
+
+        _gridVertexCount = positions.Count / 3;
+        byte[] data = new byte[positions.Count * 4];
+        Buffer.BlockCopy(positions.ToArray(), 0, data, 0, data.Length);
+
+        gl.BindBuffer(GL_ARRAY_BUFFER, _gridVbo);
+        BufferData(gl, data, data.Length);
+
+        gl.BindVertexArray(_gridVao);
+        gl.BindBuffer(GL_ARRAY_BUFFER, _gridVbo);
+        gl.EnableVertexAttribArray(0);
+        gl.VertexAttribPointer(0, 3, GL_FLOAT, 0, 12, 0);
+        gl.BindVertexArray(0);
+        gl.BindBuffer(GL_ARRAY_BUFFER, 0);
+    }
+
+    private void BuildAxes(GlInterface gl)
+    {
+        const float length = 100f;
+        float[] positions = new float[]
+        {
+            0f, 0f, 0f,  1f, 0f, 0f,  length, 0f, 0f,  1f, 0f, 0f,
+            0f, 0f, 0f,  0f, 1f, 0f,  0f, length, 0f,  0f, 1f, 0f,
+            0f, 0f, 0f,  0f, 0f, 1f,  0f, 0f, -length,  0f, 0f, 1f,
+        };
+
+        _axisVertexCount = positions.Length / 6;
+        byte[] data = new byte[positions.Length * 4];
+        Buffer.BlockCopy(positions, 0, data, 0, data.Length);
+
+        gl.BindBuffer(GL_ARRAY_BUFFER, _axisVbo);
+        BufferData(gl, data, data.Length);
+
+        gl.BindVertexArray(_axisVao);
+        gl.BindBuffer(GL_ARRAY_BUFFER, _axisVbo);
+        gl.EnableVertexAttribArray(0);
+        gl.VertexAttribPointer(0, 3, GL_FLOAT, 0, 24, 0);
+        gl.EnableVertexAttribArray(1);
+        gl.VertexAttribPointer(1, 3, GL_FLOAT, 0, 24, 12);
+        gl.BindVertexArray(0);
+        gl.BindBuffer(GL_ARRAY_BUFFER, 0);
+    }
+
     private static void BufferData(GlInterface gl, byte[] data, int length)
     {
         GCHandle handle = GCHandle.Alloc(data, GCHandleType.Pinned);
@@ -487,6 +619,16 @@ public class GlViewport : OpenGlControlBase
         finally { handle.Free(); }
     }
 
+    private void Uniform4f(GlInterface gl, int location, float x, float y, float z, float w)
+    {
+        if (s_uniform4f is null)
+        {
+            return;
+        }
+
+        _ = s_uniform4f.Invoke(gl, new object?[] { location, x, y, z, w });
+    }
+
     private static void Check(string? error, string what)
     {
         if (!string.IsNullOrEmpty(error))
@@ -536,5 +678,65 @@ public class GlViewport : OpenGlControlBase
             if (uMode == 1) base = vec4(0.78, 0.78, 0.80, 1.0);
             fragColor = vec4(base.rgb * lambert, 1.0);
         }
+        """;
+
+    private const string GridVertexSource = """
+        layout(location = 0) in vec3 aPos;
+        uniform mat4 uMvp;
+        void main() { gl_Position = uMvp * vec4(aPos, 1.0); }
+        """;
+
+    private const string GridFragmentSource = """
+        uniform vec4 uColor;
+        out vec4 fragColor;
+        void main() { fragColor = uColor; }
+        """;
+
+    private const string GridVertexSourceEs = """
+        #version 300 es
+        precision highp float;
+        layout(location = 0) in vec3 aPos;
+        uniform mat4 uMvp;
+        void main() { gl_Position = uMvp * vec4(aPos, 1.0); }
+        """;
+
+    private const string GridFragmentSourceEs = """
+        #version 300 es
+        precision highp float;
+        uniform vec4 uColor;
+        out vec4 fragColor;
+        void main() { fragColor = uColor; }
+        """;
+
+    private const string AxisVertexSource = """
+        layout(location = 0) in vec3 aPos;
+        layout(location = 1) in vec3 aColor;
+        uniform mat4 uMvp;
+        out vec3 vColor;
+        void main() { vColor = aColor; gl_Position = uMvp * vec4(aPos, 1.0); }
+        """;
+
+    private const string AxisFragmentSource = """
+        in vec3 vColor;
+        out vec4 fragColor;
+        void main() { fragColor = vec4(vColor, 1.0); }
+        """;
+
+    private const string AxisVertexSourceEs = """
+        #version 300 es
+        precision highp float;
+        layout(location = 0) in vec3 aPos;
+        layout(location = 1) in vec3 aColor;
+        uniform mat4 uMvp;
+        out vec3 vColor;
+        void main() { vColor = aColor; gl_Position = uMvp * vec4(aPos, 1.0); }
+        """;
+
+    private const string AxisFragmentSourceEs = """
+        #version 300 es
+        precision highp float;
+        in vec3 vColor;
+        out vec4 fragColor;
+        void main() { fragColor = vec4(vColor, 1.0); }
         """;
 }

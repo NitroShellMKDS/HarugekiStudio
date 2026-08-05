@@ -59,6 +59,10 @@ public partial class MainViewModel : ObservableObject
                 ? $"{info.Format} · {info.SampleRate} Hz · {info.Channels} ch · {info.TotalSamples:N0} samples"
                 : AssetTypes.IsOgg(audio.Node.Span) ? "OGG Vorbis" : "WAV";
 
+    public string TextureStatus => SelectedItem?.Payload is not TextureAsset texture
+                ? "No texture selected"
+                : $"{texture.Texture.Name}   {texture.Texture.Width} x {texture.Texture.Height}   RGBA8";
+
     public bool AudioIsLoaded => _audioPlayer.IsLoaded;
     public bool AudioCanPlay => _audioPlayer.CanPlay;
     public bool AudioCanPauseOrResume => _audioPlayer.CanPause || _audioPlayer.CanResume;
@@ -363,6 +367,7 @@ public partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(IsReplaceVisible));
         OnPropertyChanged(nameof(IsReplaceAudioVisible));
         OnPropertyChanged(nameof(AudioStatus));
+        OnPropertyChanged(nameof(TextureStatus));
 
         if (value?.Payload is not AudioAsset)
         {

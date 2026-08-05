@@ -101,42 +101,41 @@
       <!-- ================= centre ================= -->
       <Grid Grid.Column="2">
         <Grid.RowDefinitions>
-          <RowDefinition Height="Auto" />
           <RowDefinition Height="*" MinHeight="120" />
           <RowDefinition Height="4" />
           <RowDefinition Height="170" MinHeight="60" />
         </Grid.RowDefinitions>
 
-        <!-- viewport toolbar -->
-        <Border Grid.Row="0" Background="#2B2B2B" BorderBrush="#333"
-                BorderThickness="0,0,0,1" Padding="6,4">
-          <StackPanel Orientation="Horizontal" Spacing="8">
-            <TextBlock Text="Shading:" Foreground="#AAA" VerticalAlignment="Center" />
-            <ComboBox ItemsSource="{Binding ShadingModes}"
-                      SelectedItem="{Binding Shading, Mode=TwoWay}"
-                      MinWidth="110" FontSize="12" />
-            <Button Content="Reset Camera" Command="{Binding ResetViewCommand}" FontSize="12" />
-          </StackPanel>
-        </Border>
-
-        <TabControl Grid.Row="1" SelectedIndex="{Binding SelectedPane, Mode=TwoWay}"
+        <TabControl Grid.Row="0" SelectedIndex="{Binding SelectedPane, Mode=TwoWay}"
                     Background="#1A1A1A">
           <TabItem Header="Viewport">
-            <Grid>
-              <r:GlViewport Name="Viewport"
-                            Model="{Binding ViewportModel}"
-                            Shading="{Binding Shading}" />
-              <Canvas Background="Transparent"
-                      PointerPressed="Overlay_OnPointerPressed"
-                      PointerMoved="Overlay_OnPointerMoved"
-                      PointerReleased="Overlay_OnPointerReleased"
-                      PointerWheelChanged="Overlay_OnPointerWheelChanged" />
-            </Grid>
+            <DockPanel>
+              <Border DockPanel.Dock="Top" Background="#2B2B2B" BorderBrush="#333"
+                      BorderThickness="0,0,0,1" Padding="6,4">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <TextBlock Text="Shading:" Foreground="#AAA" VerticalAlignment="Center" />
+                  <ComboBox ItemsSource="{Binding ShadingModes}"
+                            SelectedItem="{Binding Shading, Mode=TwoWay}"
+                            MinWidth="110" FontSize="12" />
+                  <Button Content="Reset Camera" Command="{Binding ResetViewCommand}" FontSize="12" />
+                </StackPanel>
+              </Border>
+              <Grid>
+                <r:GlViewport Name="Viewport"
+                              Model="{Binding ViewportModel}"
+                              Shading="{Binding Shading}" />
+                <Canvas Background="Transparent"
+                        PointerPressed="Overlay_OnPointerPressed"
+                        PointerMoved="Overlay_OnPointerMoved"
+                        PointerReleased="Overlay_OnPointerReleased"
+                        PointerWheelChanged="Overlay_OnPointerWheelChanged" />
+              </Grid>
+            </DockPanel>
           </TabItem>
           <TabItem Header="Texture">
             <DockPanel Background="#141414">
               <Border DockPanel.Dock="Top" Background="#222" Padding="8,4">
-                <TextBlock Text="{Binding TextureCaption}" Foreground="#CCC" />
+                <TextBlock Text="{Binding TextureStatus}" Foreground="#CCC" />
               </Border>
               <ScrollViewer HorizontalScrollBarVisibility="Auto"
                             VerticalScrollBarVisibility="Auto">
@@ -175,7 +174,7 @@
           </TabItem>
         </TabControl>
 
-        <GridSplitter Grid.Row="2" Background="#2D2D2D" ResizeDirection="Rows"
+        <GridSplitter Grid.Row="1" Background="#2D2D2D" ResizeDirection="Rows"
                       HorizontalAlignment="Stretch" />
 
         <!-- console -->
