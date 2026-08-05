@@ -25,6 +25,8 @@ public partial class MainViewModel : ObservableObject
     private readonly IAppStorageProvider _storageProvider;
     private readonly List<OpenArchive> _open = [];
     private CancellationTokenSource? _searchCts;
+    private AudioPlaybackService _audioPlayer = new();
+    private RingNode? _currentAudioNode;
 
     [ObservableProperty] private TreeItemViewModel? _selectedItem;
     [ObservableProperty] private RingModel? _viewportModel;
@@ -57,26 +59,108 @@ public partial class MainViewModel : ObservableObject
         {
             if (SelectedItem?.Payload is not AudioAsset audio) return "No audio selected";
             string format = AssetTypes.IsOgg(audio.Node.Span) ? "OGG Vorbis" : "WAV";
+            if (_audioPlayer.IsLoaded && ReferenceEquals(_currentAudioNode, audio.Node))
+            {
+                return $"{format} · {_audioPlayer.SampleRate} Hz · {_audioPlayer.Channels} ch · {_audioPlayer.SampleCount:N0} samples";
+            }
             return $"{format} · {TreeBuilder.Size(audio.Node.Length)}";
         }
     }
 
-    public bool AudioIsLoaded => false;
-    public bool AudioCanPlay => false;
-    public bool AudioCanPauseOrResume => false;
-    public bool AudioCanStop => false;
-    public double AudioCurrentSeconds => 0;
-    public double AudioTotalSeconds => 0;
-    public string AudioTimeDisplay => "00:00 / 00:00";
+    public bool AudioIsLoaded => _audioPlayer.IsLoaded;
+    public bool AudioCanPlay => _audioPlayer.CanPlay;
+    public bool AudioCanPauseOrResume => _audioPlayer.CanPause || _audioPlayer.CanResume;
+    public bool AudioCanStop => _audioPlayer.CanStop;
+    public double AudioCurrentSeconds => _audioPlayer.CurrentTime.TotalSeconds;
+    public double AudioTotalSeconds => _audioPlayer.TotalTime.TotalSeconds;
+    public string AudioTimeDisplay => $"{_audioPlayer.CurrentTime:mm\\:ss} / {_audioPlayer.TotalTime:mm\\:ss}";
 
     [RelayCommand]
-    private void PlayAudio() { }
+    private async Task PlayAudio()
+    {
+        if (SelectedItem?.Payload is not AudioAsset audio) return;
+
+        if (!_audioPlayer.IsLoaded || !ReferenceEquals(audio.Node, _currentAudioNode))
+        {
+            await LoadAudioAsync(audio);
+        }
+
+        _audioPlayer.Play();
+    }
 
     [RelayCommand]
-    private void PauseResumeAudio() { }
+    private void PauseResumeAudio()
+    {
+        if (_audioPlayer.CanPause)
+        {
+            _audioPlayer.Pause();
+        }
+        else if (_audioPlayer.CanResume)
+        {
+            _audioPlayer.Resume();
+        }
+    }
 
     [RelayCommand]
-    private void StopAudio() { }
+    private void StopAudio()
+    {
+        _audioPlayer.Stop();
+    }
+
+    private async Task LoadAudioAsync(AudioAsset audio)
+    {
+        try
+        {
+            byte[] data = audio.Node.GetPayload();
+            string extension = AssetTypes.IsOgg(audio.Node.Span) ? ".ogg" : ".wav";
+
+            if (_audioPlayer.IsLoaded)
+            {
+                _audioPlayer.Stop();
+            }
+
+            await Task.Run(() => _audioPlayer.Load(data, extension));
+            _currentAudioNode = audio.Node;
+
+            OnPropertyChanged(nameof(AudioStatus));
+            OnPropertyChanged(nameof(AudioIsLoaded));
+            OnPropertyChanged(nameof(AudioCanPlay));
+            OnPropertyChanged(nameof(AudioCanPauseOrResume));
+            OnPropertyChanged(nameof(AudioCanStop));
+            OnPropertyChanged(nameof(AudioTotalSeconds));
+            OnPropertyChanged(nameof(AudioCurrentSeconds));
+            OnPropertyChanged(nameof(AudioTimeDisplay));
+        }
+        catch (Exception ex)
+        {
+            Log($"Failed to load audio: {ex.Message}");
+        }
+    }
+
+    public void SeekAudio(double seconds)
+    {
+        if (_audioPlayer.IsLoaded)
+        {
+            _audioPlayer.Seek(TimeSpan.FromSeconds(seconds));
+        }
+    }
+
+    private void ResetAudioState()
+    {
+        if (_audioPlayer.IsLoaded)
+        {
+            _audioPlayer.Stop();
+        }
+        _currentAudioNode = null;
+        OnPropertyChanged(nameof(AudioStatus));
+        OnPropertyChanged(nameof(AudioIsLoaded));
+        OnPropertyChanged(nameof(AudioCanPlay));
+        OnPropertyChanged(nameof(AudioCanPauseOrResume));
+        OnPropertyChanged(nameof(AudioCanStop));
+        OnPropertyChanged(nameof(AudioCurrentSeconds));
+        OnPropertyChanged(nameof(AudioTotalSeconds));
+        OnPropertyChanged(nameof(AudioTimeDisplay));
+    }
 
     partial void OnIsSearchActiveChanged(bool value) => OnPropertyChanged(nameof(CurrentItems));
 
@@ -251,6 +335,11 @@ public partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(IsReplaceAudioVisible));
         OnPropertyChanged(nameof(AudioStatus));
 
+        if (value?.Payload is not AudioAsset)
+        {
+            ResetAudioState();
+        }
+
         Properties.Clear();
         if (value is null) return;
 
@@ -314,9 +403,8 @@ public partial class MainViewModel : ObservableObject
 
             case AudioAsset audio:
                 SelectedPane = 2;
-                Row("Audio", AssetTypes.IsOgg(audio.Node.Span) ? "OGG Vorbis" : "WAV");
-                Row("Offset", $"0x{audio.Node.Offset:X}");
-                Row("Size", TreeBuilder.Size(audio.Node.Length));
+                ResetAudioState();
+                _ = LoadAudioAsync(audio);
                 break;
 
             case RingArchive archive:
@@ -378,6 +466,7 @@ public partial class MainViewModel : ObservableObject
     {
         if (_open.Count > 0)
         {
+            ResetAudioState();
             Roots.Clear();
             _open.Clear();
             Properties.Clear();
@@ -406,6 +495,7 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private void CloseAll()
     {
+        ResetAudioState();
         Roots.Clear();
         _open.Clear();
         Properties.Clear();
