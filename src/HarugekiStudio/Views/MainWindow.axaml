@@ -55,7 +55,7 @@
               <Style Selector="TreeViewItem" x:DataType="vm:TreeItemViewModel">
                 <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
                 <Setter Property="ContextMenu">
-                  <ContextMenu DataContext="{Binding DataContext, ElementName=RootWindow}">
+                  <ContextMenu DataContext="{Binding DataContext, ElementName=RootWindow}" x:DataType="vm:MainViewModel">
                     <MenuItem Header="Extract Raw" Command="{Binding ExtractRawCommand}" IsVisible="{Binding IsExtractRawVisible}" />
                     <MenuItem Header="Export" Command="{Binding ExportCommand}" IsVisible="{Binding IsExportVisible}" />
                     <Separator />

@@ -27,7 +27,7 @@ public partial class App : Application
             {
                 if (File.Exists(arg))
                 {
-                    vm.OpenPath(arg);
+                    _ = vm.OpenPathAsync(arg);
                 }
             }
         }

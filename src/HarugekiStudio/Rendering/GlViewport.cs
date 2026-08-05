@@ -20,8 +20,8 @@ internal static class Gl
 
 /// <summary>
 /// Hardware viewport built on Avalonia's own GL binding, so it needs no external
-/// GL package. Geometry is uploaded once per model and drawn with
-/// <c>glDrawArrays</c>: the file already stores a plain triangle list.
+/// GL package. Geometry is uploaded once per model and drawn with glDrawArrays:
+/// the file already stores a plain triangle list.
 /// </summary>
 public class GlViewport : OpenGlControlBase
 {
@@ -34,12 +34,7 @@ public class GlViewport : OpenGlControlBase
     public RingModel? Model
     {
         get => GetValue(ModelProperty);
-        set
-        {
-            _ = SetValue(ModelProperty, value);
-            _dirty = true;
-            RequestNextFrameRendering();
-        }
+        set { _ = SetValue(ModelProperty, value); _dirty = true; RequestNextFrameRendering(); }
     }
 
     public ShadingMode Shading
@@ -50,47 +45,44 @@ public class GlViewport : OpenGlControlBase
 
     static GlViewport()
     {
-        _ = ShadingProperty.Changed.AddClassHandler<GlViewport>(
-            (v, _) => v.RequestNextFrameRendering());
-        _ = ModelProperty.Changed.AddClassHandler<GlViewport>((v, _) =>
-        {
-            v._dirty = true;
-            v.RequestNextFrameRendering();
-        });
+        _ = ShadingProperty.Changed.AddClassHandler<GlViewport>((v, _) => v.RequestNextFrameRendering());
+        _ = ModelProperty.Changed.AddClassHandler<GlViewport>((v, _) => { v._dirty = true; v.RequestNextFrameRendering(); });
     }
 
     // ---- camera ----------------------------------------------------------
-    private float _yaw = 0.6f, _pitch = 0.25f, _distance = 300f;
-    private float _targetDistance = 300f;
+    private float _yaw = 0.6f, _pitch = 0.25f, _distance = 300f, _targetDistance = 300f;
     private bool _zoomAnimating;
     private Vector3 _target = new(0, 80, 0);
     private bool _dirty = true;
 
-
     // ---- gl objects ------------------------------------------------------
-    private int _program, _vao, _vbo, _lineVbo, _white;
+    private int _program, _vao, _lineVao, _vbo, _lineVbo, _white;
     private int _uMvp, _uView, _uMode, _uHasTex, _uTex;
     private int _vertexCount, _lineVertexCount;
     private readonly List<(int First, int Count, int Texture)> _batches = [];
     private readonly List<int> _textures = [];
     private bool _ready;
 
+    // ---- per-frame scratch (pre-allocated to avoid heap pressure) --------
+    private readonly float[] _matScratch = new float[16];
+    private readonly object?[] _matArgs = new object?[4];
+
+    private static readonly System.Reflection.MethodInfo? s_uniformMatrix4fv =
+        typeof(GlInterface).GetMethod("UniformMatrix4fv",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+
     public GlViewport()
     {
         Focusable = true;
         ClipToBounds = true;
+        _matArgs[1] = 1;
+        _matArgs[2] = false;
     }
-
-    private bool _glReady;
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnAttachedToVisualTree(e);
-        if (_glReady)
-        {
-            _dirty = true;
-            RequestNextFrameRendering();
-        }
+        if (_ready) { _dirty = true; RequestNextFrameRendering(); }
     }
 
     public void Orbit(double dx, double dy)
@@ -147,6 +139,12 @@ public class GlViewport : OpenGlControlBase
     // ---- gl lifecycle ----------------------------------------------------
     protected override void OnOpenGlInit(GlInterface gl)
     {
+        if (s_uniformMatrix4fv is null)
+        {
+            throw new InvalidOperationException(
+                "GlInterface.UniformMatrix4fv not found — 3D rendering unavailable.");
+        }
+
         bool es = GlVersion.Type == GlProfileType.OpenGLES;
         string head = es ? "#version 300 es\nprecision highp float;\n" : "#version 330 core\n";
 
@@ -169,11 +167,11 @@ public class GlViewport : OpenGlControlBase
         _uTex = gl.GetUniformLocationString(_program, "uTex");
 
         _vao = gl.GenVertexArray();
+        _lineVao = gl.GenVertexArray();
         _vbo = gl.GenBuffer();
         _lineVbo = gl.GenBuffer();
         _white = MakeSolidTexture(gl, 0xFFFFFFFF);
         _ready = true;
-        _glReady = true;
         _dirty = true;
         RequestNextFrameRendering();
     }
@@ -189,14 +187,14 @@ public class GlViewport : OpenGlControlBase
         gl.DeleteBuffer(_vbo);
         gl.DeleteBuffer(_lineVbo);
         gl.DeleteVertexArray(_vao);
+        gl.DeleteVertexArray(_lineVao);
         gl.DeleteTexture(_white);
         gl.DeleteProgram(_program);
-        _program = _vao = _vbo = _lineVbo = _white = 0;
+        _program = _vao = _lineVao = _vbo = _lineVbo = _white = 0;
         _uMvp = _uView = _uMode = _uHasTex = _uTex = 0;
         _vertexCount = _lineVertexCount = 0;
         _batches.Clear();
         _ready = false;
-        _glReady = false;
         _dirty = true;
     }
 
@@ -244,20 +242,19 @@ public class GlViewport : OpenGlControlBase
         UniformMatrix(gl, _uMvp, mvp);
         UniformMatrix(gl, _uView, view);
         gl.Uniform1i(_uTex, 0);
-        gl.BindVertexArray(_vao);
 
         if (Shading == ShadingMode.Wireframe)
         {
-            // GL_LINES, never glPolygonMode: that entry point does not exist in
-            // GLES and would silently do nothing under ANGLE.
+            // GL_LINES instead of glPolygonMode: the polygon-mode entry point does not
+            // exist in GLES and would silently do nothing under ANGLE.
             gl.Uniform1i(_uMode, (int)ShadingMode.Wireframe);
             gl.Uniform1f(_uHasTex, 0f);
-            BindAttribs(gl, _lineVbo);
+            gl.BindVertexArray(_lineVao);
             gl.DrawArrays(Gl.Lines, 0, _lineVertexCount);
         }
         else
         {
-            BindAttribs(gl, _vbo);
+            gl.BindVertexArray(_vao);
             gl.Uniform1i(_uMode, (int)Shading);
             foreach ((int first, int count, int tex) in _batches)
             {
@@ -283,10 +280,6 @@ public class GlViewport : OpenGlControlBase
     // ---- geometry upload -------------------------------------------------
     private const int Stride = 36;   // pos 12 + normal 12 + uv 8 + colour 4
 
-    private static readonly System.Reflection.MethodInfo? s_uniformMatrix4fv =
-        typeof(GlInterface).GetMethod("UniformMatrix4fv",
-            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-
     private void Upload(GlInterface gl)
     {
         ReleaseModel(gl);
@@ -311,7 +304,6 @@ public class GlViewport : OpenGlControlBase
 
         foreach (RingMesh mesh in model.Meshes)
         {
-            int first = v;
             int tri = 0;
             for (int mi = 0; mi < mesh.TriangleCounts.Length; mi++)
             {
@@ -320,10 +312,8 @@ public class GlViewport : OpenGlControlBase
 
                 for (int f = 0; f < count; f++, tri++)
                 {
-                    // X and Y mirrors combine to a 180° rotation, so winding is
-                    // preserved — no corner swap needed.
-                    int a = tri * 3, b = (tri * 3) + 1, c = (tri * 3) + 2;
-                    foreach (int idx in (ReadOnlySpan<int>)[a, b, c])
+                    // X and Y mirrors combine to a 180° rotation, preserving winding.
+                    foreach (int idx in (ReadOnlySpan<int>)[tri * 3, (tri * 3) + 1, (tri * 3) + 2])
                     {
                         WriteVertex(verts, v++ * Stride, mesh, idx);
                     }
@@ -340,7 +330,7 @@ public class GlViewport : OpenGlControlBase
                 if (mi < mesh.Materials.Count)
                 {
                     RingMaterial? mat = mesh.Materials[mi];
-                    if (mat != null && mat.HasTexture && mat.TextureIndex < _textures.Count)
+                    if (mat?.HasTexture == true && mat.TextureIndex < _textures.Count)
                     {
                         texId = _textures[(int)mat.TextureIndex];
                     }
@@ -355,11 +345,19 @@ public class GlViewport : OpenGlControlBase
         _vertexCount = v;
         _lineVertexCount = l / Stride;
 
+        // Upload VBO data
         gl.BindBuffer(GL_ARRAY_BUFFER, _vbo);
         BufferData(gl, verts, _vertexCount * Stride);
         gl.BindBuffer(GL_ARRAY_BUFFER, _lineVbo);
         BufferData(gl, lines, _lineVertexCount * Stride);
         gl.BindBuffer(GL_ARRAY_BUFFER, 0);
+
+        // Record attribute layout into each VAO so OnOpenGlRender just binds and draws.
+        gl.BindVertexArray(_vao);
+        BindAttribs(gl, _vbo);
+        gl.BindVertexArray(_lineVao);
+        BindAttribs(gl, _lineVbo);
+        gl.BindVertexArray(0);
 
         ResetCamera();
     }
@@ -381,7 +379,7 @@ public class GlViewport : OpenGlControlBase
         s[35] = mesh.Colors[(i * 4) + 3];
     }
 
-    private void BindAttribs(GlInterface gl, int buffer)
+    private static void BindAttribs(GlInterface gl, int buffer)
     {
         gl.BindBuffer(GL_ARRAY_BUFFER, buffer);
         gl.VertexAttribPointer(0, 3, GL_FLOAT, 0, Stride, 0);
@@ -407,14 +405,8 @@ public class GlViewport : OpenGlControlBase
     private static void BufferData(GlInterface gl, byte[] data, int length)
     {
         GCHandle handle = GCHandle.Alloc(data, GCHandleType.Pinned);
-        try
-        {
-            gl.BufferData(GL_ARRAY_BUFFER, new IntPtr(length), handle.AddrOfPinnedObject(), GL_STATIC_DRAW);
-        }
-        finally
-        {
-            handle.Free();
-        }
+        try { gl.BufferData(GL_ARRAY_BUFFER, new IntPtr(length), handle.AddrOfPinnedObject(), GL_STATIC_DRAW); }
+        finally { handle.Free(); }
     }
 
     private static int MakeTexture(GlInterface gl, RingTexture tex)
@@ -432,22 +424,14 @@ public class GlViewport : OpenGlControlBase
 
         int id = gl.GenTexture();
         gl.BindTexture(GL_TEXTURE_2D, id);
-
         GCHandle handle = GCHandle.Alloc(tex.Pixels, GCHandleType.Pinned);
         try
         {
             gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex.Width, tex.Height, 0,
                 GL_RGBA, GL_UNSIGNED_BYTE, handle.AddrOfPinnedObject());
         }
-        catch
-        {
-            gl.DeleteTexture(id);
-            throw;
-        }
-        finally
-        {
-            handle.Free();
-        }
+        catch { gl.DeleteTexture(id); throw; }
+        finally { handle.Free(); }
 
         gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -465,12 +449,10 @@ public class GlViewport : OpenGlControlBase
         GCHandle handle = GCHandle.Alloc(bytes, GCHandleType.Pinned);
         try
         {
-            gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, handle.AddrOfPinnedObject());
+            gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                handle.AddrOfPinnedObject());
         }
-        finally
-        {
-            handle.Free();
-        }
+        finally { handle.Free(); }
         gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         gl.BindTexture(GL_TEXTURE_2D, 0);
@@ -478,32 +460,31 @@ public class GlViewport : OpenGlControlBase
     }
 
     /// <summary>
-    /// System.Numerics matrices are row-major with row-vector semantics, exactly
-    /// like D3D. Uploading them untransposed makes GLSL read the transpose, so
-    /// the column-vector product in the shader is the row-vector product here.
+    /// System.Numerics matrices are row-major (D3D row-vector convention). Uploading
+    /// them untransposed makes GLSL read the transpose, so the column-vector product
+    /// in the shader equals the row-vector product used here.
+    /// Uses pre-allocated scratch buffers to avoid per-frame heap allocation.
     /// </summary>
-    private static void UniformMatrix(GlInterface gl, int location, Matrix4x4 m)
+    private void UniformMatrix(GlInterface gl, int location, Matrix4x4 m)
     {
         if (s_uniformMatrix4fv is null)
         {
-            throw new MissingMethodException("GlInterface.UniformMatrix4fv not found");
+            return;
         }
 
-        float[] f = new float[16]
-        {
-            m.M11, m.M12, m.M13, m.M14, m.M21, m.M22, m.M23, m.M24,
-            m.M31, m.M32, m.M33, m.M34, m.M41, m.M42, m.M43, m.M44,
-        };
-        GCHandle handle = GCHandle.Alloc(f, GCHandleType.Pinned);
+        _matScratch[0] = m.M11; _matScratch[1] = m.M12; _matScratch[2] = m.M13; _matScratch[3] = m.M14;
+        _matScratch[4] = m.M21; _matScratch[5] = m.M22; _matScratch[6] = m.M23; _matScratch[7] = m.M24;
+        _matScratch[8] = m.M31; _matScratch[9] = m.M32; _matScratch[10] = m.M33; _matScratch[11] = m.M34;
+        _matScratch[12] = m.M41; _matScratch[13] = m.M42; _matScratch[14] = m.M43; _matScratch[15] = m.M44;
+
+        GCHandle handle = GCHandle.Alloc(_matScratch, GCHandleType.Pinned);
         try
         {
-            object[] args = new object[] { location, 1, false, handle.AddrOfPinnedObject() };
-            _ = s_uniformMatrix4fv.Invoke(gl, args);
+            _matArgs[0] = location;
+            _matArgs[3] = handle.AddrOfPinnedObject();
+            _ = s_uniformMatrix4fv.Invoke(gl, _matArgs);
         }
-        finally
-        {
-            handle.Free();
-        }
+        finally { handle.Free(); }
     }
 
     private static void Check(string? error, string what)

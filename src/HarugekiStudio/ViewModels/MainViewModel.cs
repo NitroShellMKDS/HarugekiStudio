@@ -7,7 +7,6 @@ using HarugekiStudio.Rendering;
 using HarugekiStudio.Services;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
-using System.Threading;
 
 namespace HarugekiStudio.ViewModels;
 
@@ -16,6 +15,8 @@ public sealed record OpenArchive(RingArchive Archive, string Path)
     public bool Dirty { get; set; }
     public bool BackedUp { get; set; }
 }
+
+public sealed record PropertyRow(string Name, string Value);
 
 public partial class MainViewModel : ObservableObject
 {
@@ -47,10 +48,7 @@ public partial class MainViewModel : ObservableObject
     public bool IsReplaceRawVisible => SelectedItem?.Payload is RingNode or ModelAsset or TextureAsset;
     public bool IsReplaceVisible => SelectedItem?.Payload is TextureAsset;
 
-    partial void OnIsSearchActiveChanged(bool value)
-    {
-        OnPropertyChanged(nameof(CurrentItems));
-    }
+    partial void OnIsSearchActiveChanged(bool value) => OnPropertyChanged(nameof(CurrentItems));
 
     public MainViewModel(IAppStorageProvider storageProvider)
     {
@@ -96,28 +94,25 @@ public partial class MainViewModel : ObservableObject
         try
         {
             await Task.Delay(200, token);
-            if (token.IsCancellationRequested) return;
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
 
             Status = "Searching...";
-            var sw = Stopwatch.StartNew();
+            Stopwatch sw = Stopwatch.StartNew();
 
-            var (results, totalMatches) = await Task.Run(() =>
+            (List<SearchResultDto>? results, int totalMatches) = await Task.Run(() =>
             {
                 int matches = 0;
-                var list = new List<SearchResultDto>();
-
+                List<SearchResultDto> list = [];
                 foreach (TreeItemViewModel root in Roots)
                 {
                     token.ThrowIfCancellationRequested();
                     int rootMatches = 0;
-                    var filtered = BuildFilteredTree(root, ref rootMatches, searchText, token);
-                    if (filtered is not null)
-                    {
-                        list.Add(filtered);
-                        matches += rootMatches;
-                    }
+                    SearchResultDto? filtered = BuildFilteredTree(root, ref rootMatches, searchText, token);
+                    if (filtered is not null) { list.Add(filtered); matches += rootMatches; }
                 }
-
                 return (list, matches);
             }, token);
 
@@ -126,8 +121,7 @@ public partial class MainViewModel : ObservableObject
             SearchResults.Clear();
             IsSearchActive = true;
             MatchCount = totalMatches;
-
-            foreach (var dto in results)
+            foreach (SearchResultDto dto in results)
             {
                 SearchResults.Add(CreateViewModel(dto, searchText));
             }
@@ -136,13 +130,11 @@ public partial class MainViewModel : ObservableObject
                 ? "No matches found."
                 : $"Found {totalMatches} match{(totalMatches == 1 ? "" : "es")} in {sw.ElapsedMilliseconds}ms.";
         }
-        catch (OperationCanceledException)
-        {
-            // Superseded by newer input
-        }
+        catch (OperationCanceledException) { }
     }
 
-    private SearchResultDto? BuildFilteredTree(TreeItemViewModel item, ref int totalMatches, string searchText, CancellationToken token)
+    private SearchResultDto? BuildFilteredTree(
+        TreeItemViewModel item, ref int totalMatches, string searchText, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
 
@@ -151,18 +143,14 @@ public partial class MainViewModel : ObservableObject
             item.EnsureLoaded();
 
             bool selfMatches = item.Header.IndexOf(searchText, StringComparison.OrdinalIgnoreCase) >= 0;
-            var matchingChildren = new List<SearchResultDto>();
+            List<SearchResultDto> matchingChildren = [];
 
             foreach (TreeItemViewModel child in item.Children)
             {
                 token.ThrowIfCancellationRequested();
                 int childMatches = 0;
-                var filteredChild = BuildFilteredTree(child, ref childMatches, searchText, token);
-                if (filteredChild is not null)
-                {
-                    matchingChildren.Add(filteredChild);
-                    totalMatches += childMatches;
-                }
+                SearchResultDto? filteredChild = BuildFilteredTree(child, ref childMatches, searchText, token);
+                if (filteredChild is not null) { matchingChildren.Add(filteredChild); totalMatches += childMatches; }
             }
 
             if (selfMatches)
@@ -170,27 +158,25 @@ public partial class MainViewModel : ObservableObject
                 totalMatches++;
             }
 
-            if (selfMatches || matchingChildren.Count > 0)
-            {
-                return new SearchResultDto(item.Header, item.Detail, item.Kind, item.Payload, matchingChildren);
-            }
-
-            return null;
+            return selfMatches || matchingChildren.Count > 0
+                ? new SearchResultDto(item.Header, item.Detail, item.Kind, item.Payload, matchingChildren)
+                : null;
         }
     }
 
     private TreeItemViewModel CreateViewModel(SearchResultDto dto, string searchText)
     {
-        var vm = new TreeItemViewModel(dto.Header, dto.Detail, dto.Kind)
+        TreeItemViewModel vm = new(dto.Header, dto.Detail, dto.Kind)
         {
             Payload = dto.Payload,
             IsExpanded = true,
         };
         vm.UpdateSearchHighlight(searchText);
-        foreach (var child in dto.Children)
+        foreach (SearchResultDto child in dto.Children)
         {
             vm.Children.Add(CreateViewModel(child, searchText));
         }
+
         return vm;
     }
 
@@ -202,7 +188,7 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    private void ClearAllHighlightsRecursive(TreeItemViewModel item)
+    private static void ClearAllHighlightsRecursive(TreeItemViewModel item)
     {
         item.UpdateSearchHighlight(null);
         foreach (TreeItemViewModel child in item.Children)
@@ -211,13 +197,14 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    private sealed record SearchResultDto(string Header, string Detail, string Kind, object? Payload, List<SearchResultDto> Children);
+    private sealed record SearchResultDto(
+        string Header, string Detail, string Kind, object? Payload, List<SearchResultDto> Children);
 
     private void Log(string line)
     {
         Console.Add($"[{DateTime.Now:HH:mm:ss}] {line}");
         Status = line;
-        while (Console.Count > MaxConsoleLines)
+        if (Console.Count > MaxConsoleLines)
         {
             Console.RemoveAt(0);
         }
@@ -254,7 +241,7 @@ public partial class MainViewModel : ObservableObject
                 Row("Draw vertices", ms.Mesh.VertexCount);
                 Row("Skin vertices", ms.Mesh.SkinPositions.Length / 3);
                 Row("Materials", string.Join(", ", ms.Mesh.Materials.Select(x => x.Name)));
-                Row("Per-material tris", string.Join(", ", ms.Mesh.TriangleCounts));
+                Row("Per-mat tris", string.Join(", ", ms.Mesh.TriangleCounts));
                 break;
 
             case TextureAsset t:
@@ -265,7 +252,7 @@ public partial class MainViewModel : ObservableObject
                 Row("Bone", b.Name);
                 Row("Node index", b.NodeIndex);
                 Row("Parent node", b.ParentNodeIndex);
-                Row("Weighted vertices", b.Weights.Length);
+                Row("Weighted verts", b.Weights.Length);
                 break;
 
             case RingMaterial mat:
@@ -279,7 +266,7 @@ public partial class MainViewModel : ObservableObject
                 Row("Frames", anim.Frames);
                 Row("Duration", $"{anim.Duration:0.00} s");
                 Row("Tracks", anim.Tracks.Count);
-                Row("Keys per track", anim.Tracks.Count > 0 ? anim.Tracks[0].Times.Length : 0);
+                Row("Keys/track", anim.Tracks.Count > 0 ? anim.Tracks[0].Times.Length : 0);
                 break;
 
             case RingNode node:
@@ -313,7 +300,6 @@ public partial class MainViewModel : ObservableObject
         TexturePreview = ImageIO.ToBitmap(t);
         TextureCaption = $"{t.Name}   {t.Width} x {t.Height}   RGBA8";
         SelectedPane = 1;
-        Properties.Clear();
         Properties.Add(new PropertyRow("Texture", t.Name));
         Properties.Add(new PropertyRow("Size", $"{t.Width} x {t.Height}"));
         Properties.Add(new PropertyRow("Format", "RGBA8 uncompressed"));
@@ -329,7 +315,7 @@ public partial class MainViewModel : ObservableObject
         IReadOnlyList<IStorageFile> files = await _storageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
             Title = "Open archive",
-            AllowMultiple = true,
+            AllowMultiple = false,
             FileTypeFilter = [new FilePickerFileType("Harugeki archive") { Patterns = ["*.bin"] }],
         });
 
@@ -338,13 +324,13 @@ public partial class MainViewModel : ObservableObject
             string? path = file.TryGetLocalPath();
             if (path is not null)
             {
-                OpenPath(path);
+                await OpenPathAsync(path);
             }
         }
     }
 
     /// <summary>Opens an archive by path; also used for command-line arguments.</summary>
-    public void OpenPath(string path)
+    public async Task OpenPathAsync(string path)
     {
         if (_open.Count > 0)
         {
@@ -356,9 +342,10 @@ public partial class MainViewModel : ObservableObject
             SearchFilter = "";
         }
 
+        Status = $"Opening {Path.GetFileName(path)}…";
         try
         {
-            RingArchive archive = RingArchive.Load(path);
+            RingArchive archive = await Task.Run(() => RingArchive.Load(path));
             _open.Add(new OpenArchive(archive, path));
             TreeItemViewModel root = TreeBuilder.ForArchive(archive, Path.GetFileName(path));
             Roots.Add(root);
@@ -413,10 +400,9 @@ public partial class MainViewModel : ObservableObject
 
         try
         {
-            GltfWriter.Write(model, path);
+            await Task.Run(() => GltfWriter.Write(model, path));
             Log($"Exported {model.Name} to {Path.GetFileName(path)} "
-                + $"({model.Meshes.Sum(m => m.TriangleCount)} triangles, "
-                + $"{model.Textures.Count} textures).");
+                + $"({model.Meshes.Sum(m => m.TriangleCount)} triangles, {model.Textures.Count} textures).");
         }
         catch (Exception ex) { Log($"Export failed: {ex.Message}"); }
     }
@@ -438,7 +424,7 @@ public partial class MainViewModel : ObservableObject
 
         try
         {
-            ImageIO.SavePng(asset.Texture, path);
+            await Task.Run(() => ImageIO.SavePng(asset.Texture, path));
             Log($"Exported texture {asset.Texture.Name} to {Path.GetFileName(path)}.");
         }
         catch (Exception ex) { Log($"Export failed: {ex.Message}"); }
@@ -448,11 +434,7 @@ public partial class MainViewModel : ObservableObject
     private async Task ExtractRawAsync()
     {
         RingNode? node = GetNodeFromPayload(SelectedItem?.Payload);
-        if (node is null)
-        {
-            Log("Select a node to extract raw.");
-            return;
-        }
+        if (node is null) { Log("Select a node to extract raw."); return; }
 
         string suggestedName = GetSuggestedRawName(SelectedItem!, node);
 
@@ -463,12 +445,18 @@ public partial class MainViewModel : ObservableObject
             DefaultExtension = "bin",
             FileTypeChoices = [new FilePickerFileType("Raw data") { Patterns = ["*.bin", "*.*"] }],
         });
-        if (file is null) return;
+        if (file is null)
+        {
+            return;
+        }
 
         try
         {
             string? path = file.TryGetLocalPath();
-            if (path is null) return;
+            if (path is null)
+            {
+                return;
+            }
 
             byte[] data = node.GetPayload();
             File.WriteAllBytes(path, data);
@@ -481,11 +469,9 @@ public partial class MainViewModel : ObservableObject
     {
         string header = item.Header;
         int bracket = header.IndexOf(']');
-        if (bracket >= 0 && header.Length > bracket + 1 && header[bracket + 1] == ' ')
-        {
-            return header[(bracket + 2)..];
-        }
-        return Path.GetFileName(node.PathText);
+        return bracket >= 0 && header.Length > bracket + 1 && header[bracket + 1] == ' '
+            ? header[(bracket + 2)..]
+            : Path.GetFileName(node.PathText);
     }
 
     [RelayCommand]
@@ -493,8 +479,7 @@ public partial class MainViewModel : ObservableObject
     {
         if (SelectedItem?.Payload is not TextureAsset asset)
         {
-            Log("Select a texture to replace. Model replacement is not available "
-                + "in this build.");
+            Log("Select a texture to replace. Model replacement is not available in this build.");
             return;
         }
 
@@ -519,8 +504,7 @@ public partial class MainViewModel : ObservableObject
             owner?.Dirty = true;
 
             ShowTexture(asset);
-            Log($"Replaced {asset.Texture.Name} from {Path.GetFileName(path)}. "
-                + "Use File > Save to write it back.");
+            Log($"Replaced {asset.Texture.Name} from {Path.GetFileName(path)}. Use File > Save to write it back.");
         }
         catch (Exception ex) { Log($"Replace failed: {ex.Message}"); }
     }
@@ -529,11 +513,7 @@ public partial class MainViewModel : ObservableObject
     private async Task ReplaceRawAsync()
     {
         RingNode? node = GetNodeFromPayload(SelectedItem?.Payload);
-        if (node is null)
-        {
-            Log("Select a node to replace raw.");
-            return;
-        }
+        if (node is null) { Log("Select a node to replace raw."); return; }
 
         IReadOnlyList<IStorageFile> files = await _storageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
@@ -541,18 +521,32 @@ public partial class MainViewModel : ObservableObject
             AllowMultiple = false,
             FileTypeFilter = [new FilePickerFileType("All files") { Patterns = ["*.*"] }],
         });
-        if (files.Count == 0) return;
+        if (files.Count == 0)
+        {
+            return;
+        }
 
         try
         {
             string? path = files[0].TryGetLocalPath();
-            if (path is null) return;
+            if (path is null)
+            {
+                return;
+            }
 
             byte[] data = File.ReadAllBytes(path);
             if (data.Length > node.Length)
             {
                 Log($"Replace raw failed: file ({TreeBuilder.Size(data.Length)}) exceeds slot size ({TreeBuilder.Size(node.Length)}).");
                 return;
+            }
+
+            // Zero-pad shorter data so sibling offsets in the rebuilt archive stay intact.
+            if (data.Length < node.Length)
+            {
+                byte[] padded = new byte[node.Length];
+                data.CopyTo(padded, 0);
+                data = padded;
             }
 
             node.Replace(data);
@@ -572,35 +566,35 @@ public partial class MainViewModel : ObservableObject
             RingNode node => node,
             ModelAsset m => m.Node,
             TextureAsset t => t.Node,
-            _ => null
+            _ => null,
         };
     }
 
     [RelayCommand]
-    private void Save()
+    private async Task Save()
     {
         List<OpenArchive> dirty = _open.Where(o => o.Dirty).ToList();
         if (dirty.Count == 0) { Log("Nothing to save."); return; }
 
-        foreach (OpenArchive? entry in dirty)
+        Status = "Saving…";
+        foreach (OpenArchive entry in dirty)
         {
             try
             {
-                // Back up once per session before the first write.
                 if (!entry.BackedUp)
                 {
                     string backup = entry.Path + ".bak";
                     if (!File.Exists(backup))
                     {
-                        File.Copy(entry.Path, backup);
+                        await Task.Run(() => File.Copy(entry.Path, backup));
                     }
 
                     entry.BackedUp = true;
                     Log($"Backed up to {Path.GetFileName(backup)}.");
                 }
 
-                byte[] bytes = entry.Archive.Save();
-                File.WriteAllBytes(entry.Path, bytes);
+                byte[] bytes = await Task.Run(() => entry.Archive.Save());
+                await Task.Run(() => File.WriteAllBytes(entry.Path, bytes));
                 entry.Dirty = false;
                 Log($"Saved {Path.GetFileName(entry.Path)} ({TreeBuilder.Size(bytes.Length)}).");
             }
@@ -615,7 +609,6 @@ public partial class MainViewModel : ObservableObject
     }
 
     public event Action? ResetViewRequested;
-
     public event Action? RequestClose;
 
     [RelayCommand]
@@ -624,5 +617,3 @@ public partial class MainViewModel : ObservableObject
         RequestClose?.Invoke();
     }
 }
-
-public sealed record PropertyRow(string Name, string Value);

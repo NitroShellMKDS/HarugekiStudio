@@ -9,15 +9,16 @@ namespace HarugekiStudio.Services;
 /// <summary>
 /// Writes a model as glTF 2.0 (.gltf + PNG textures).
 ///
-/// The parser already converts file coordinates to standard Z-up Cartesian on
-/// load, so positions, normals, and bone bind matrices arrive here in right-
-/// handed X-right / Y-forward / Z-up form. This writer copies them straight
-/// through, appends a base64-embedded binary buffer inside the .gltf, and
-/// writes textures into a sibling folder. UVs are untouched.
+/// The parser already converts file coordinates to standard Z-up Cartesian on load,
+/// so positions, normals, and bone bind matrices arrive here in right-handed
+/// X-right / Y-forward / Z-up form. This writer copies them straight through,
+/// appends a base64-embedded binary buffer, and writes textures into a sibling folder.
 /// </summary>
 public static class GltfWriter
 {
     private const int Float = 5126, UByte = 5121, UShort = 5123, UInt = 5125;
+
+    private static readonly HashSet<char> s_invalidChars = [.. Path.GetInvalidFileNameChars()];
 
     public static void Write(RingModel model, string path)
     {
@@ -29,8 +30,7 @@ public static class GltfWriter
         JsonArray accessors = [];
         JsonArray views = [];
 
-        int Accessor(Array data, int comps, int componentType, bool normalized = false,
-                     bool minMax = false)
+        int Accessor(Array data, int comps, int componentType, bool normalized = false, bool minMax = false)
         {
             int offset = (int)bin.Length;
             int length = Buffer.ByteLength(data);
@@ -55,14 +55,7 @@ public static class GltfWriter
                 ["bufferView"] = views.Count - 1,
                 ["componentType"] = componentType,
                 ["count"] = count,
-                ["type"] = comps switch
-                {
-                    1 => "SCALAR",
-                    2 => "VEC2",
-                    3 => "VEC3",
-                    4 => "VEC4",
-                    _ => "MAT4",
-                },
+                ["type"] = comps switch { 1 => "SCALAR", 2 => "VEC2", 3 => "VEC3", 4 => "VEC4", _ => "MAT4" },
             };
             if (normalized)
             {
@@ -119,7 +112,7 @@ public static class GltfWriter
         Matrix4x4[] inverse = new Matrix4x4[bones.Count];
         for (int i = 0; i < bones.Count; i++)
         {
-            world[i] = Mirror(bones[i].Bind);
+            world[i] = FloatsToMatrix(bones[i].Bind);
             // Derive the inverse so the skeleton is self-consistent: a few
             // weightless dynamic-bone anchors carry an unused second matrix
             // that is not the inverse of their bind matrix.
@@ -147,16 +140,10 @@ public static class GltfWriter
             {
                 roots.Add(jointNodes[i]);
             }
-
             ((JsonObject)nodes[jointNodes[i]]!)["matrix"] = MatrixArray(local);
         }
 
-        int skin = -1;
-        if (bones.Count > 0)
-        {
-            float[] ibm = BuildInverseBindMatrixArray(inverse, bones.Count);
-            skin = 0;
-        }
+        int skin = bones.Count > 0 ? 0 : -1;
 
         // ---- meshes ----
         JsonArray meshes = [];
@@ -209,8 +196,7 @@ public static class GltfWriter
                 uint[] idx = new uint[count * 3];
                 for (int f = 0; f < count; f++)
                 {
-                    // X and Y mirrors combine to a 180° rotation, so winding is
-                    // preserved — no corner swap needed.
+                    // X and Y mirrors combine to a 180° rotation, preserving winding.
                     idx[f * 3] = (uint)((first + f) * 3);
                     idx[(f * 3) + 1] = (uint)(((first + f) * 3) + 1);
                     idx[(f * 3) + 2] = (uint)(((first + f) * 3) + 2);
@@ -229,7 +215,8 @@ public static class GltfWriter
                     JsonObject pbr = new()
                     {
                         ["baseColorFactor"] = new JsonArray(
-                            [JsonValue.Create(1.0), JsonValue.Create(1.0), JsonValue.Create(1.0), JsonValue.Create(1.0)]),
+                            [JsonValue.Create(1.0), JsonValue.Create(1.0),
+                             JsonValue.Create(1.0), JsonValue.Create(1.0)]),
                         ["metallicFactor"] = 0.0,
                         ["roughnessFactor"] = 1.0,
                     };
@@ -269,7 +256,6 @@ public static class GltfWriter
         if (skin >= 0)
         {
             float[] ibm = BuildInverseBindMatrixArray(inverse, bones.Count);
-
             skins.Add(new JsonObject
             {
                 ["inverseBindMatrices"] = Accessor(ibm, 16, Float),
@@ -279,11 +265,7 @@ public static class GltfWriter
 
         JsonObject gltf = new()
         {
-            ["asset"] = new JsonObject
-            {
-                ["version"] = "2.0",
-                ["generator"] = "Harugeki Studio",
-            },
+            ["asset"] = new JsonObject { ["version"] = "2.0", ["generator"] = "Harugeki Studio" },
             ["scene"] = 0,
             ["scenes"] = new JsonArray { new JsonObject { ["nodes"] = sceneNodes } },
             ["nodes"] = nodes,
@@ -303,7 +285,11 @@ public static class GltfWriter
             ["bufferViews"] = views,
             ["buffers"] = new JsonArray
             {
-                new JsonObject { ["uri"] = "data:application/octet-stream;base64," + Convert.ToBase64String(bin.ToArray()), ["byteLength"] = (int)bin.Length },
+                new JsonObject
+                {
+                    ["uri"] = "data:application/octet-stream;base64," + Convert.ToBase64String(bin.ToArray()),
+                    ["byteLength"] = (int)bin.Length,
+                },
             },
         };
         if (skins.Count > 0)
@@ -311,7 +297,8 @@ public static class GltfWriter
             gltf["skins"] = skins;
         }
 
-        File.WriteAllText(Path.Combine(dir, stem + ".gltf"),
+        File.WriteAllText(
+            Path.Combine(dir, stem + ".gltf"),
             gltf.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
             new UTF8Encoding(false));
     }
@@ -323,6 +310,7 @@ public static class GltfWriter
         {
             CopyMatrix(inverse[i], ibm, i * 16);
         }
+
         return ibm;
     }
 
@@ -376,13 +364,12 @@ public static class GltfWriter
         return (joints, weights, true);
     }
 
-    /// <summary>Passes the row-vector D3D bind matrix through unchanged.</summary>
-    private static Matrix4x4 Mirror(float[] m)
+    /// <summary>Converts a row-major float[16] to Matrix4x4.</summary>
+    private static Matrix4x4 FloatsToMatrix(float[] m)
     {
-        Matrix4x4 v = new(
-            m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7],
-            m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]);
-        return v;
+        return new(
+        m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7],
+        m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]);
     }
 
     private static JsonArray MatrixArray(Matrix4x4 m)
@@ -394,7 +381,7 @@ public static class GltfWriter
 
     private static void CopyMatrix(Matrix4x4 m, float[] dst, int at)
     {
-        dst[at + 0] = m.M11; dst[at + 1] = m.M12; dst[at + 2] = m.M13; dst[at + 3] = m.M14;
+        dst[at] = m.M11; dst[at + 1] = m.M12; dst[at + 2] = m.M13; dst[at + 3] = m.M14;
         dst[at + 4] = m.M21; dst[at + 5] = m.M22; dst[at + 6] = m.M23; dst[at + 7] = m.M24;
         dst[at + 8] = m.M31; dst[at + 9] = m.M32; dst[at + 10] = m.M33; dst[at + 11] = m.M34;
         dst[at + 12] = m.M41; dst[at + 13] = m.M42; dst[at + 14] = m.M43; dst[at + 15] = m.M44;
@@ -402,11 +389,15 @@ public static class GltfWriter
 
     internal static string SafeName(string name)
     {
-        char[] invalid = Path.GetInvalidFileNameChars();
+        if (name.Length == 0)
+        {
+            return "asset";
+        }
+
         StringBuilder sb = new(name.Length);
         foreach (char c in name)
         {
-            _ = sb.Append(Array.IndexOf(invalid, c) >= 0 ? '_' : c);
+            _ = sb.Append(s_invalidChars.Contains(c) ? '_' : c);
         }
 
         return sb.Length == 0 ? "asset" : sb.ToString();

@@ -7,7 +7,7 @@ Header is 64 bytes:
     0x2C  u32       width
     0x30  u32       height
     0x34  u32[3]    unknown
-    0x40  pixels, width*height*4, BGRA8, top-down, no padding
+    0x40  pixels, width*height*4, RGBA8, top-down, no padding
 
 Confirmed against the archive layout: 128x128 yields exactly 0x10040 bytes,
 matching the uniform stride between sibling entries in char.bin.
@@ -26,7 +26,7 @@ class Texture:
         self.name = name
         self.width = width
         self.height = height
-        self.pixels = pixels      # raw BGRA8 bytes, exactly as stored
+        self.pixels = pixels      # raw RGBA8 bytes, exactly as stored
         self.extra = extra
 
     def __repr__(self):

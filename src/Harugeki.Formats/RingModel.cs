@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace Harugeki.Formats;
 
 /// <summary>
@@ -110,7 +112,7 @@ public sealed class RingModel
             if (blob.Slice(o + 0x70, 4).SequenceEqual("Mate"u8))
             {
                 try { model.Meshes.Add(RingMesh.Parse(blob, o, end, i)); }
-                catch (ArgumentException) { /* helper node we cannot read; skip */ }
+                catch (ArgumentException ex) { Debug.WriteLine($"[RingModel] skipped node {i}: {ex.Message}"); }
             }
             else
             {
@@ -193,9 +195,16 @@ public sealed class RingBone
         // Negate X basis row (0,1,2), keep Y row (4,5,6), negate Z row (8,9,10),
         // and negate X/Z in the translation row (12,14), keep Y (13).
         int[] negBind = [0, 1, 2, 8, 9, 10, 12, 14];
-        foreach (int i in negBind) bind[i] = -bind[i];
+        foreach (int i in negBind)
+        {
+            bind[i] = -bind[i];
+        }
+
         int[] negInv = [0, 1, 2, 8, 9, 10, 12, 14];
-        foreach (int i in negInv) inv[i] = -inv[i];
+        foreach (int i in negInv)
+        {
+            inv[i] = -inv[i];
+        }
 
         int[] verts = new int[n];
         float[] weights = new float[n];
