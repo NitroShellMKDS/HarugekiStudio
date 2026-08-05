@@ -1,14 +1,13 @@
 using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
-using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Harugeki.Formats;
+using HarugekiStudio.Audio;
 using HarugekiStudio.Rendering;
 using HarugekiStudio.Services;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
-using System.Text;
 
 namespace HarugekiStudio.ViewModels;
 
@@ -26,7 +25,7 @@ public partial class MainViewModel : ObservableObject
     private readonly IAppStorageProvider _storageProvider;
     private readonly List<OpenArchive> _open = [];
     private CancellationTokenSource? _searchCts;
-    private AudioPlaybackService _audioPlayer = new();
+    private readonly AudioPlaybackService _audioPlayer = new();
     private RingNode? _currentAudioNode;
 
     [ObservableProperty] private TreeItemViewModel? _selectedItem;
@@ -54,19 +53,11 @@ public partial class MainViewModel : ObservableObject
     public bool IsReplaceVisible => SelectedItem?.Payload is TextureAsset;
     public bool IsReplaceAudioVisible => SelectedItem?.Payload is AudioAsset;
 
-    public string AudioStatus
-    {
-        get
-        {
-            if (SelectedItem?.Payload is not AudioAsset audio) return "No audio selected";
-            string format = AssetTypes.IsOgg(audio.Node.Span) ? "OGG Vorbis" : "WAV";
-            if (_audioPlayer.IsLoaded && ReferenceEquals(_currentAudioNode, audio.Node))
-            {
-                return $"{format} · {_audioPlayer.SampleRate} Hz · {_audioPlayer.Channels} ch · {_audioPlayer.SampleCount:N0} samples";
-            }
-            return format;
-        }
-    }
+    public string AudioStatus => SelectedItem?.Payload is not AudioAsset audio
+                ? "No audio selected"
+                : AudioInfoHelper.TryGetInfo(audio.Node.Span, out AudioInfo info)
+                ? $"{info.Format} · {info.SampleRate} Hz · {info.Channels} ch · {info.TotalSamples:N0} samples"
+                : AssetTypes.IsOgg(audio.Node.Span) ? "OGG Vorbis" : "WAV";
 
     public bool AudioIsLoaded => _audioPlayer.IsLoaded;
     public bool AudioCanPlay => _audioPlayer.CanPlay;
@@ -81,7 +72,11 @@ public partial class MainViewModel : ObservableObject
         get => _audioPlayer.CurrentTime.TotalSeconds;
         set
         {
-            if (_isSeeking) return;
+            if (_isSeeking)
+            {
+                return;
+            }
+
             _isSeeking = true;
             try
             {
@@ -97,7 +92,10 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private async Task PlayAudio()
     {
-        if (SelectedItem?.Payload is not AudioAsset audio) return;
+        if (SelectedItem?.Payload is not AudioAsset audio)
+        {
+            return;
+        }
 
         if (!_audioPlayer.IsLoaded || !ReferenceEquals(audio.Node, _currentAudioNode))
         {
@@ -181,7 +179,7 @@ public partial class MainViewModel : ObservableObject
     {
         if (!Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
         {
-            Avalonia.Threading.Dispatcher.UIThread.Post(() => OnAudioPlayerStateChanged());
+            Avalonia.Threading.Dispatcher.UIThread.Post(OnAudioPlayerStateChanged);
             return;
         }
 
@@ -480,121 +478,21 @@ public partial class MainViewModel : ObservableObject
         Properties.Clear();
         Row("Format", AssetTypes.IsOgg(audio.Node.Span) ? "OGG Vorbis" : "WAV");
 
-        int sampleRate = 0, channels = 0, bitsPerSample = 0, dataOffset = 0, dataLength = 0;
-        bool parsed = AssetTypes.IsOgg(audio.Node.Span)
-            ? TryParseOgg(audio.Node.Span, out sampleRate, out channels, out bitsPerSample, out dataOffset, out dataLength)
-            : TryParseWav(audio.Node.Span, out sampleRate, out channels, out bitsPerSample, out dataOffset, out dataLength);
-
-        if (parsed)
+        if (AudioInfoHelper.TryGetInfo(audio.Node.Span, out AudioInfo info))
         {
-            int totalSamples = dataLength / (bitsPerSample / 8);
-            Row("Sample rate", $"{sampleRate:N0} Hz");
-            Row("Samples", $"{totalSamples:N0}");
-            Row("Bit depth", bitsPerSample == 8 ? "8-bit" : "16-bit");
-            Row("Channels", channels == 1 ? "Mono" : channels == 2 ? "Stereo" : channels.ToString());
+            Row("Sample rate", $"{info.SampleRate:N0} Hz");
+            Row("Samples", $"{info.TotalSamples:N0}");
+            Row("Bit depth", info.BitsPerSample == 8 ? "8-bit" : "16-bit");
+            Row("Channels", info.Channels == 1 ? "Mono" : info.Channels == 2 ? "Stereo" : info.Channels.ToString());
         }
 
         Row("Offset", $"0x{audio.Node.Offset:X}");
         Row("Size", TreeBuilder.Size(audio.Node.Length));
 
-        void Row(string name, object? v) => Properties.Add(new PropertyRow(name, v?.ToString() ?? ""));
-    }
-
-    private static bool TryParseWav(ReadOnlySpan<byte> data, out int sampleRate, out int channels, out int bitsPerSample, out int dataOffset, out int dataLength)
-    {
-        sampleRate = channels = bitsPerSample = dataOffset = dataLength = 0;
-
-        if (data.Length < 44) return false;
-        if (data[0] != (byte)'R' || data[1] != (byte)'I' || data[2] != (byte)'F' || data[3] != (byte)'F') return false;
-        if (data[8] != (byte)'W' || data[9] != (byte)'A' || data[10] != (byte)'V' || data[11] != (byte)'E') return false;
-
-        int offset = 12;
-        while (offset < data.Length - 8)
+        void Row(string name, object? v)
         {
-            string chunkId = Encoding.ASCII.GetString(data.Slice(offset, 4));
-            int chunkSize = BitConverter.ToInt32(data.Slice(offset + 4));
-
-            if (chunkId == "fmt ")
-            {
-                if (chunkSize < 16) return false;
-                int audioFormat = BitConverter.ToUInt16(data.Slice(offset + 8));
-                if (audioFormat != 1) return false;
-                channels = BitConverter.ToUInt16(data.Slice(offset + 10));
-                sampleRate = BitConverter.ToInt32(data.Slice(offset + 12));
-                bitsPerSample = BitConverter.ToUInt16(data.Slice(offset + 22));
-            }
-            else if (chunkId == "data")
-            {
-                dataOffset = offset + 8;
-                dataLength = chunkSize;
-                break;
-            }
-
-            offset += 8 + chunkSize;
+            Properties.Add(new PropertyRow(name, v?.ToString() ?? ""));
         }
-
-        return sampleRate > 0 && channels > 0 && (bitsPerSample == 8 || bitsPerSample == 16) && dataLength > 0;
-    }
-
-    private static bool TryParseOgg(ReadOnlySpan<byte> data, out int sampleRate, out int channels, out int bitsPerSample, out int dataOffset, out int dataLength)
-    {
-        sampleRate = channels = bitsPerSample = dataOffset = dataLength = 0;
-
-        int pos = 0;
-        bool foundIdHeader = false;
-        ulong totalSamplesPerChannel = 0;
-
-        while (pos <= data.Length - 27)
-        {
-            if (data[pos] != (byte)'O' || data[pos + 1] != (byte)'g' || data[pos + 2] != (byte)'g' || data[pos + 3] != (byte)'S')
-            {
-                pos++;
-                continue;
-            }
-
-            byte headerType = data[pos + 5];
-            ulong granulePos = BitConverter.ToUInt64(data.Slice(pos + 6));
-            int numSegments = data[pos + 26];
-            int segTableStart = pos + 27;
-            int packetDataStart = segTableStart + numSegments;
-
-            if (packetDataStart > data.Length) break;
-
-            if (!foundIdHeader && granulePos == 0 && (headerType & 0x02) != 0)
-            {
-                if (packetDataStart + 30 <= data.Length)
-                {
-                    if (data[packetDataStart] == 0x01 && data[packetDataStart + 1] == (byte)'v' && data[packetDataStart + 2] == (byte)'o' &&
-                        data[packetDataStart + 3] == (byte)'r' && data[packetDataStart + 4] == (byte)'b' && data[packetDataStart + 5] == (byte)'i' &&
-                        data[packetDataStart + 6] == (byte)'s')
-                    {
-                        channels = data[packetDataStart + 11];
-                        sampleRate = BitConverter.ToInt32(data.Slice(packetDataStart + 12));
-                        bitsPerSample = 16;
-                        foundIdHeader = true;
-                    }
-                }
-            }
-
-            if ((headerType & 0x04) != 0)
-            {
-                totalSamplesPerChannel = granulePos;
-            }
-
-            int pageDataSize = 0;
-            for (int i = 0; i < numSegments; i++)
-            {
-                pageDataSize += data[segTableStart + i];
-            }
-            pos += 27 + numSegments + pageDataSize;
-        }
-
-        if (!foundIdHeader || sampleRate == 0 || channels == 0) return false;
-
-        long totalInterleavedSamples = (long)totalSamplesPerChannel * channels;
-        if (totalInterleavedSamples > (int.MaxValue / 2)) return false;
-        dataLength = (int)(totalInterleavedSamples * 2);
-        return true;
     }
 
     // ---- audio -----------------------------------------------------------

@@ -1,8 +1,8 @@
-<Application xmlns="https://github.com/avaloniaui"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:vm="clr-namespace:HarugekiStudio.ViewModels"
-             x:Class="HarugekiStudio.App"
-             RequestedThemeVariant="Dark">
+  <Application xmlns="https://github.com/avaloniaui"
+               xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+               xmlns:vm="clr-namespace:HarugekiStudio.ViewModels"
+               x:Class="HarugekiStudio.App"
+               RequestedThemeVariant="Dark">
   <Application.Styles>
     <FluentTheme />
     <Style Selector="Menu">

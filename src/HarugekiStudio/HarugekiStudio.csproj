@@ -23,13 +23,17 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <AvaloniaResource Include="Assets/icon.png" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.1.1" />
     <PackageReference Include="Avalonia.Desktop" Version="12.1.1" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.1" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageReference Include="Silk.NET.OpenAL" Version="2.23.0" />
-    <PackageReference Include="NVorbis" Version="0.10.1" />
+    <PackageReference Include="NVorbis" Version="0.10.5" />
   </ItemGroup>
 
   <ItemGroup>
