@@ -5,6 +5,12 @@ little-endian; floats are IEEE-754 32-bit. The engine is Direct3D 9, so
 matrices are row-vector (`v' = v * M`) with the translation in the last row,
 and the coordinate system is left-handed with Y up and units of roughly 1 cm.
 
+The files store geometry in left-handed X/Y/Z with X and Z mirrored compared to
+standard Z-up Cartesian. On load, X and Z are negated (a conjugation by
+`diag(-1, 1, -1, 1)`) so consumers see standard right-handed coordinates: X
+right, Y forward, Z up. Bone bind and inverse-bind matrices receive the same
+conjugation so the skeleton stays consistent.
+
 ## 1. Archive container (`data/*.bin`)
 
 A recursively nested table of contents.
@@ -14,6 +20,7 @@ A recursively nested table of contents.
 | 0x00 | u32 | `count` |
 | 0x04 | u32 × count | child offsets, **relative to this table's own base** |
 | … | u8 | `0xFE` padding up to the first child |
+| … | | child payloads, each 32-byte aligned |
 
 Notes that matter:
 
@@ -25,6 +32,26 @@ Notes that matter:
 - Children are themselves tables to varying depths. A node is a leaf when it
   fails validation (offsets in range, first offset clearing the table, `0xFE`
   padding intact).
+- A recursive walk must stop at payloads it recognises (textures, models,
+  animations, audio), otherwise it descends into them and shreds them.
+
+### Validation rules
+
+| check | limit |
+|---|---|
+| file size | 8 bytes minimum, 4 GiB maximum |
+| table count | 1 to 8191 |
+| first child offset | `>= 4 + count * 4` (clears the header) |
+| all offsets | `>= need` and `<= size` |
+| padding bytes | `0xFE` from end of header up to first distinct offset |
+
+### Serialisation
+
+Saving rebuilds the archive from the root. Aliased nodes (same source offset) are
+written once and referenced by all slots that pointed at them. Replaced nodes
+become their own payload. Children are written sequentially and padded to
+32-byte boundaries. The `0xFE` padding is only written inside tables, not between
+siblings.
 
 ## 2. Texture — `ringtex2`
 
@@ -37,16 +64,32 @@ no DXT or palettised variant anywhere in the shipped data.
 | 0x10 | char[16] | asset name, e.g. `hi00_body` |
 | 0x2C | u32 | width |
 | 0x30 | u32 | height |
-| 0x40 | u8[w*h*4] | **RGBA8**, top-down, no row padding |
+| 0x40 | u8[w*h*4] | **BGRA8**, top-down, no row padding |
 
-A 128×128 texture is therefore exactly `0x10040` bytes, which matches the
-uniform stride observed between sibling entries.
+A 128×128 texture is therefore exactly `0x10040` bytes.
 
-The channel order is **R,G,B,A** — not the B,G,R,A that a D3D9 `A8R8G8B8`
-surface would use in memory, so do not assume it. Measured across the 140 face
-textures, the per-channel means are 220 / 163 / 111: a skin tone. Interpreted as
-B,G,R the same bytes would be a saturated sky blue, so the order is not in
-doubt. Alpha is 255 throughout the shipped textures.
+### Validation
+
+| check | limit |
+|---|---|
+| dimensions | 1 to 16384 |
+| pixel count | 256 MiB maximum |
+| total size | `0x40 + w * h * 4` bytes |
+
+### Channel order
+
+The file stores pixels as **B,G,R,A**. Measured across the 140 face textures,
+the per-channel means are 220 / 163 / 111: a skin tone. Interpreted as R,G,B,A
+the same bytes would be a saturated sky blue, so the order is not in doubt.
+Alpha is 255 throughout the shipped textures.
+
+When displaying, the bytes are reordered to RGBA8 (swap R and B). When importing
+edited images, the reverse reordering is applied.
+
+### Round-tripping
+
+The original header is preserved when rebuilding a texture blob. Only the name
+and dimensions are rewritten; any unknown header bytes survive untouched.
 
 ## 3. Model blob
 
@@ -58,6 +101,18 @@ doubt. Alpha is 255 throughout the shipped textures.
 | 0x0C | u32 | texture count |
 | 0x10 | u32 × n | offsets of embedded `ringtex2` blobs |
 | 0x50 | u32 × node_count | node offsets, `0xFE` padded to the first node |
+
+### Validation
+
+| check | limit |
+|---|---|
+| blob length | `>= 0x60` |
+| node count | 1 to 4095 |
+| texture count | `<= 64` |
+| first node offset | must equal `0x50 + node_count * 4` |
+
+A node's length runs to the next node or, for the last, to the first texture
+offset (if textures exist) or the end of the blob.
 
 Every node starts with a 0x70-byte name. A node is a **mesh** when the four bytes
 at +0x70 are `"Mate"` (the start of its first material name); otherwise it is a
@@ -93,16 +148,21 @@ instead of trusting it.
 | offset | type | meaning |
 |---|---|---|
 | 0x00 | char[0x20] | name |
-| 0x30 | u32[] | triangle count per material, terminated by a zero |
+| 0x30 | u32[] | triangle count per material, terminated by a zero (up to 16 entries) |
 | 0x70 | record × n | materials, 0x44 bytes each |
 | … | u32[4] | `(nverts, nverts, ntris, node_index)` — follows the materials |
 | +0xDC | f32[3] × nverts | skin-space positions |
 | … | f32[3] × nverts | skin-space normals |
 | … | | draw stream |
 
-The u32 at 0x28 looks like a material count but is unreliable; derive the count
-from the non-zero triangle counts at 0x30 instead. The position array starts
-0xDC bytes after the count block.
+The per-material triangle counts at 0x30 determine the material count; the u32
+at 0x28 is unreliable and is not used. The position array starts 0xDC bytes after
+the count block.
+
+The count block `(nverts, nverts, ntris, node_index)` is located by scanning
+forward from 0x70 up to 0x400 for four consecutive u32s where the first two are
+equal and non-zero, the first is `< 2^20`, and the third matches the summed
+triangle count.
 
 Material record (0x44 bytes):
 
@@ -125,12 +185,16 @@ Draw vertex (40 bytes):
 | 0x00 | f32[3] | position — always exactly equals `positions[vertex_id]` |
 | 0x0C | f32[3] | normal, unit length |
 | 0x18 | f32[2] | UV, origin top-left (same as glTF, no flip needed) |
-| 0x20 | u8[4] | vertex colour (see note) |
+| 0x20 | u8[4] | vertex colour, stored **BGRA** |
 | 0x24 | u16[2] | `vertex_id`, stored twice — index into the skin arrays |
 
-Every vertex colour in the shipped data is neutral grey (`R==G==B`, typically
-`0x808080FF`) across all 368,862 character vertices, so its channel order cannot
-be determined from the data and does not affect any output.
+X and Z of positions and normals are negated on load (conjugation by
+`diag(-1, 1, -1, 1)`) so the geometry is expressed in standard right-handed
+space. UVs, colors, and weight indices are passed through unchanged.
+
+Every vertex colour in the shipped data is neutral grey (`B==G==R`, typically
+`0x808080FF`) across all character vertices, so the channel order of the
+shipped data is certain but has no visible effect on any output.
 
 Triangles are assigned to materials in order: the first material takes the first
 `tri_counts[0]` faces, and so on.
@@ -147,6 +211,7 @@ bone weight lists index the skin-space arrays rather than the draw vertices.
   mirror reverses orientation, triangle winding must be flipped to match.
 - UVs pass through untouched.
 - glTF allows 4 influences per vertex; the game's data never exceeds this.
+- Vertex colours are exposed as RGBA8 regardless of the stored BGRA order.
 
 ## 5. Animation
 
@@ -158,6 +223,17 @@ clip.
 | 0x00 | u32 | node count — matches the model's node count |
 | 0x04 | u32 | duration, in frames |
 | 0x08 | u32 × n | per-node track offsets; the first lands at `0x08 + n*4` |
+
+### Validation
+
+| check | limit |
+|---|---|
+| blob length | `>= 16` bytes |
+| node count | 1 to 4095 |
+| duration | 1 to 99999 frames |
+| first track offset | must equal `8 + node_count * 4` |
+| key count | 1 to 99999 |
+| track size | exactly `36 + 68 * key_count` |
 
 Track:
 
@@ -173,9 +249,6 @@ Key — 68 bytes:
 |---|---|---|
 | 0x00 | f32[16] | matrix, same layout **and same space** as the bind matrix |
 | 0x40 | f32 | time, in frames |
-
-Track size is exactly `36 + 68 * key_count` for every track in every animation,
-which is a good parser self-check.
 
 Two properties make this straightforward to convert:
 
@@ -193,7 +266,18 @@ The duration field counts frames at **60 fps**, and key times are whole frames.
 > A naive recursive walk will happily descend into one and shred it into its
 > individual bone tracks. Recognise animations *before* recursing.
 
-## 6. Other data, not decoded
+## 6. Audio
+
+Audio blobs (`bgm.bin`, `se.bin`, `voice.bin`) are standard container formats,
+not custom. Two formats are present in the shipped data:
+
+- **Ogg Vorbis** — magic bytes `OggS` (`0x4F 0x67 0x67 0x53`)
+- **WAV** — RIFF header (`0x52 0x49 0x46 0x46`) with `WAVE` at offset 8
+
+No custom audio container is used; the game relies on the bundled `ogg.dll` /
+`vorbis.dll` for decoding.
+
+## 7. Other data, not decoded
 
 - **`BTEF`** — 29 blobs in `eff.bin`, magic `"BTEF"` followed by `0x10000000`
   and a count. Effect scripts rather than geometry; not decoded.
@@ -201,5 +285,3 @@ The duration field counts frames at **60 fps**, and key times are whole frames.
   end of most parent nodes. Padding/end markers, not assets.
 - `param.bin`, `sys.bin`, `sce.bin`, `sel.cdt` — gameplay tables, shader
   bytecode and UI data; outside the scope of asset extraction.
-- Audio (`bgm.bin`, `se.bin`, `voice.bin`) is Ogg Vorbis, hence the bundled
-  `ogg.dll` / `vorbis.dll`.
