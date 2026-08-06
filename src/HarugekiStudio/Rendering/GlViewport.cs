@@ -66,6 +66,8 @@ public class GlViewport : OpenGlControlBase
     private readonly List<(int First, int Count, int Texture)> _batches = [];
     private readonly List<int> _textures = [];
     private bool _ready;
+    private float[]? _animPositions;
+    private float[]? _animNormals;
 
     // ---- per-frame scratch (pre-allocated to avoid heap pressure) --------
     private readonly float[] _matScratch = new float[16];
@@ -246,6 +248,8 @@ public class GlViewport : OpenGlControlBase
         _gridVertexCount = 0;
         _axisProgram = _axisVao = _axisVbo = _axisMvp = 0;
         _axisVertexCount = 0;
+        _animPositions = null;
+        _animNormals = null;
         _ready = false;
         _dirty = true;
     }
@@ -303,6 +307,11 @@ public class GlViewport : OpenGlControlBase
             UniformMatrix(gl, _axisMvp, mvp);
             gl.BindVertexArray(_axisVao);
             gl.DrawArrays(Gl.Lines, 0, _axisVertexCount);
+        }
+
+        if (_animPositions is not null && _animNormals is not null)
+        {
+            ApplyAnimatedFrame(gl);
         }
 
         if (_vertexCount == 0)
@@ -384,7 +393,6 @@ public class GlViewport : OpenGlControlBase
 
                 for (int f = 0; f < count; f++, tri++)
                 {
-                    // X and Y mirrors combine to a 180° rotation, preserving winding.
                     foreach (int idx in (ReadOnlySpan<int>)[tri * 3, (tri * 3) + 1, (tri * 3) + 2])
                     {
                         WriteVertex(verts, v++ * Stride, mesh, idx);
@@ -417,14 +425,12 @@ public class GlViewport : OpenGlControlBase
         _vertexCount = v;
         _lineVertexCount = l / Stride;
 
-        // Upload VBO data
         gl.BindBuffer(GL_ARRAY_BUFFER, _vbo);
         BufferData(gl, verts, _vertexCount * Stride);
         gl.BindBuffer(GL_ARRAY_BUFFER, _lineVbo);
         BufferData(gl, lines, _lineVertexCount * Stride);
         gl.BindBuffer(GL_ARRAY_BUFFER, 0);
 
-        // Record attribute layout into each VAO so OnOpenGlRender just binds and draws.
         gl.BindVertexArray(_vao);
         BindAttribs(gl, _vbo);
         gl.BindVertexArray(_lineVao);
@@ -432,6 +438,54 @@ public class GlViewport : OpenGlControlBase
         gl.BindVertexArray(0);
 
         ResetCamera();
+    }
+
+    public void SetAnimatedFrame(float[]? positions, float[]? normals)
+    {
+        _animPositions = positions;
+        _animNormals = normals;
+        RequestNextFrameRendering();
+    }
+
+    private void ApplyAnimatedFrame(GlInterface gl)
+    {
+        if (_animPositions is null || _animNormals is null) return;
+        RingModel? model = Model;
+        if (model is null || model.Meshes.Count == 0) return;
+
+        int total = model.Meshes.Sum(m => m.VertexCount);
+        byte[] verts = new byte[total * Stride];
+        byte[] lines = new byte[total * 2 * Stride];
+        int v = 0, l = 0;
+        int posOffset = 0, nrmOffset = 0;
+
+        foreach (RingMesh mesh in model.Meshes)
+        {
+            int tri = 0;
+            for (int mi = 0; mi < mesh.TriangleCounts.Length; mi++)
+            {
+                for (int f = 0; f < mesh.TriangleCounts[mi]; f++, tri++)
+                {
+                    foreach (int idx in (ReadOnlySpan<int>)[tri * 3, (tri * 3) + 1, (tri * 3) + 2])
+                    {
+                        WriteVertexAnimated(verts, v++ * Stride, mesh, idx, ref posOffset, ref nrmOffset);
+                    }
+
+                    int p0 = (v - 3) * Stride, p1 = (v - 2) * Stride, p2 = (v - 1) * Stride;
+                    foreach (int e in (ReadOnlySpan<int>)[p0, p1, p1, p2, p2, p0])
+                    {
+                        Array.Copy(verts, e, lines, l, Stride);
+                        l += Stride;
+                    }
+                }
+            }
+        }
+
+        gl.BindBuffer(GL_ARRAY_BUFFER, _vbo);
+        BufferData(gl, verts, total * Stride);
+        gl.BindBuffer(GL_ARRAY_BUFFER, _lineVbo);
+        BufferData(gl, lines, total * 2 * Stride);
+        gl.BindBuffer(GL_ARRAY_BUFFER, 0);
     }
 
     private static void WriteVertex(byte[] dst, int at, RingMesh mesh, int i)
@@ -449,6 +503,25 @@ public class GlViewport : OpenGlControlBase
         s[33] = mesh.Colors[(i * 4) + 1];
         s[34] = mesh.Colors[(i * 4) + 2];
         s[35] = mesh.Colors[(i * 4) + 3];
+    }
+
+    private void WriteVertexAnimated(byte[] dst, int at, RingMesh mesh, int i, ref int posOffset, ref int nrmOffset)
+    {
+        Span<byte> s = dst.AsSpan(at);
+        _ = BitConverter.TryWriteBytes(s, _animPositions![posOffset]);
+        _ = BitConverter.TryWriteBytes(s[4..], _animPositions[posOffset + 1]);
+        _ = BitConverter.TryWriteBytes(s[8..], _animPositions[posOffset + 2]);
+        _ = BitConverter.TryWriteBytes(s[12..], _animNormals![nrmOffset]);
+        _ = BitConverter.TryWriteBytes(s[16..], _animNormals[nrmOffset + 1]);
+        _ = BitConverter.TryWriteBytes(s[20..], _animNormals[nrmOffset + 2]);
+        _ = BitConverter.TryWriteBytes(s[24..], mesh.Uvs[i * 2]);
+        _ = BitConverter.TryWriteBytes(s[28..], mesh.Uvs[(i * 2) + 1]);
+        s[32] = mesh.Colors[i * 4];
+        s[33] = mesh.Colors[(i * 4) + 1];
+        s[34] = mesh.Colors[(i * 4) + 2];
+        s[35] = mesh.Colors[(i * 4) + 3];
+        posOffset += 3;
+        nrmOffset += 3;
     }
 
     private static void BindAttribs(GlInterface gl, int buffer)

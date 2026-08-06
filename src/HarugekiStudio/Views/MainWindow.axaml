@@ -1,8 +1,9 @@
-  <Window xmlns="https://github.com/avaloniaui"
-          xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-          xmlns:vm="clr-namespace:HarugekiStudio.ViewModels"
-          xmlns:r="clr-namespace:HarugekiStudio.Rendering"
-          x:Class="HarugekiStudio.Views.MainWindow"
+   <Window xmlns="https://github.com/avaloniaui"
+           xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+           xmlns:vm="clr-namespace:HarugekiStudio.ViewModels"
+           xmlns:r="clr-namespace:HarugekiStudio.Rendering"
+           xmlns:views="clr-namespace:HarugekiStudio.Views"
+           x:Class="HarugekiStudio.Views.MainWindow"
           x:Name="RootWindow"
           x:DataType="vm:MainViewModel"
           Title="Harugeki Studio" Width="1280" Height="760"
@@ -177,23 +178,59 @@
         <GridSplitter Grid.Row="1" Background="#2D2D2D" ResizeDirection="Rows"
                       HorizontalAlignment="Stretch" />
 
-        <!-- console -->
-        <Border Grid.Row="3" Background="#181818" BorderBrush="#333" BorderThickness="0,1,0,0">
-          <DockPanel>
-            <TextBlock DockPanel.Dock="Top" Text="Console" Margin="8,4"
-                       Foreground="#AAA" FontWeight="SemiBold" />
-            <ScrollViewer Name="ConsoleScroll">
-              <ItemsControl ItemsSource="{Binding Console}" Margin="8,0,8,8">
-                <ItemsControl.ItemTemplate>
-                  <DataTemplate>
-                    <TextBlock Text="{Binding}" Foreground="#9CDCFE"
-                               FontFamily="Consolas,monospace" FontSize="11" />
-                  </DataTemplate>
-                </ItemsControl.ItemTemplate>
-              </ItemsControl>
-            </ScrollViewer>
-          </DockPanel>
-        </Border>
+        <!-- bottom tabs: Console | Animation -->
+        <TabControl Grid.Row="3" Background="#1A1A1A">
+          <TabItem Header="Console">
+            <Border Background="#181818" BorderBrush="#333" BorderThickness="0,1,0,0">
+              <DockPanel>
+                <TextBlock DockPanel.Dock="Top" Text="Console" Margin="8,4"
+                           Foreground="#AAA" FontWeight="SemiBold" />
+                <ScrollViewer Name="ConsoleScroll">
+                  <ItemsControl ItemsSource="{Binding Console}" Margin="8,0,8,8">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <TextBlock Text="{Binding}" Foreground="#9CDCFE"
+                                   FontFamily="Consolas,monospace" FontSize="11" />
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </ScrollViewer>
+              </DockPanel>
+            </Border>
+          </TabItem>
+          <TabItem Header="Animation">
+            <DockPanel Background="#1A1A1A">
+              <Border DockPanel.Dock="Top" Background="#2B2B2B" BorderBrush="#333"
+                      BorderThickness="0,0,0,1" Padding="6,4">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <TextBlock Text="Animation:" Foreground="#AAA" VerticalAlignment="Center" />
+                  <ComboBox ItemsSource="{Binding AvailableAnimations}"
+                            SelectedItem="{Binding SelectedAnimation}"
+                            MinWidth="200" FontSize="12"
+                            IsEnabled="{Binding IsAnimationAvailable}">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate>
+                        <TextBlock Text="{Binding Name}" />
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
+                  <Button Content="Play" Command="{Binding PlayAnimationCommand}"
+                          IsEnabled="{Binding IsAnimationAvailable}"
+                          FontSize="12" />
+                  <Button Content="Stop" Command="{Binding StopAnimationCommand}"
+                          IsEnabled="{Binding IsAnimationPlaying}"
+                          FontSize="12" />
+                  <TextBlock Text="{Binding AnimationTime, StringFormat={}{0:0.00}s}" Foreground="#CCC"
+                             VerticalAlignment="Center" Margin="8,0,0,0" />
+                </StackPanel>
+              </Border>
+              <views:DopeSheetView Animations="{Binding AvailableAnimations}"
+                         SelectedAnimation="{Binding SelectedAnimation}"
+                         CurrentTime="{Binding AnimationTime}"
+                         Duration="{Binding AnimationDuration}" />
+            </DockPanel>
+          </TabItem>
+        </TabControl>
       </Grid>
 
       <GridSplitter Grid.Column="3" Background="#2D2D2D" ResizeDirection="Columns" />

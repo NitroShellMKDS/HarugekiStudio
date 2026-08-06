@@ -24,6 +24,10 @@ public partial class MainWindow : Window
         InitializeComponent();
         _vp = this.FindControl<GlViewport>("Viewport");
         _consoleScroll = this.FindControl<ScrollViewer>("ConsoleScroll");
+        if (_vp is not null && DataContext is MainViewModel vm)
+        {
+            vm.Viewport = _vp;
+        }
         DataContextChanged += OnDataContextChanged;
     }
 

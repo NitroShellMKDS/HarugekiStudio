@@ -1,5 +1,6 @@
 using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Harugeki.Formats;
@@ -8,6 +9,7 @@ using HarugekiStudio.Rendering;
 using HarugekiStudio.Services;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Numerics;
 
 namespace HarugekiStudio.ViewModels;
 
@@ -27,6 +29,17 @@ public partial class MainViewModel : ObservableObject
     private CancellationTokenSource? _searchCts;
     private readonly AudioPlaybackService _audioPlayer = new();
     private RingNode? _currentAudioNode;
+    private RingModel? _animatedModel;
+    private RingNode? _animatedModelNode;
+    private bool _isAnimationPlaying;
+    private double _animationTime;
+    private readonly DispatcherTimer _animationTimer;
+    private Dictionary<string, int> _boneNameToIndex = new();
+    private Matrix4x4[] _boneMatrices = Array.Empty<Matrix4x4>();
+    private float[]? _animatedPositions;
+    private float[]? _animatedNormals;
+
+    public GlViewport? Viewport { get; set; }
 
     [ObservableProperty] private TreeItemViewModel? _selectedItem;
     [ObservableProperty] private RingModel? _viewportModel;
@@ -37,11 +50,13 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private int _selectedPane;
     [ObservableProperty] private ShadingMode _shading = ShadingMode.Textured;
     [ObservableProperty] private string _status = "Open a .bin archive to begin.";
+    [ObservableProperty] private RingAnimation? _selectedAnimation;
 
     public ObservableCollection<TreeItemViewModel> Roots { get; } = [];
     public ObservableCollection<TreeItemViewModel> SearchResults { get; } = [];
     public ObservableCollection<PropertyRow> Properties { get; } = [];
     public ObservableCollection<string> Console { get; } = [];
+    public ObservableCollection<RingAnimation> AvailableAnimations { get; } = [];
     public Array ShadingModes { get; } = Enum.GetValues<ShadingMode>();
 
     public ObservableCollection<TreeItemViewModel> CurrentItems => IsSearchActive ? SearchResults : Roots;
@@ -62,6 +77,12 @@ public partial class MainViewModel : ObservableObject
     public string TextureStatus => SelectedItem?.Payload is not TextureAsset texture
                 ? "No texture selected"
                 : $"{texture.Texture.Name}   {texture.Texture.Width} x {texture.Texture.Height}   RGBA8";
+
+    public bool IsAnimationPlaying => _isAnimationPlaying;
+    public double AnimationTime => _animationTime;
+    public double AnimationDuration => SelectedAnimation?.Duration ?? 0;
+    public bool HasAnimations => AvailableAnimations.Count > 0;
+    public bool IsAnimationAvailable => _animatedModel is not null && AvailableAnimations.Count > 0;
 
     public bool AudioIsLoaded => _audioPlayer.IsLoaded;
     public bool AudioCanPlay => _audioPlayer.CanPlay;
@@ -200,6 +221,7 @@ public partial class MainViewModel : ObservableObject
     {
         _storageProvider = storageProvider;
         _audioPlayer.StateChanged += OnAudioPlayerStateChanged;
+        _animationTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(1000.0 / 60.0), DispatcherPriority.Background, OnAnimationTick);
         Log("Harugeki Studio ready.");
     }
 
@@ -381,6 +403,7 @@ public partial class MainViewModel : ObservableObject
         {
             case ModelAsset m:
                 ShowModel(m.Model);
+                FindSiblingAnimations(m.Node);
                 Row("Name", m.Model.Name);
                 Row("Bones", m.Model.Bones.Count);
                 Row("Meshes", m.Model.Meshes.Count);
@@ -393,6 +416,7 @@ public partial class MainViewModel : ObservableObject
 
             case MeshAsset ms:
                 ShowModel(ms.Model);
+                FindSiblingAnimations(ms.Node);
                 Row("Name", ms.Mesh.Name);
                 Row("Triangles", ms.Mesh.TriangleCount);
                 Row("Draw vertices", ms.Mesh.VertexCount);
@@ -454,6 +478,18 @@ public partial class MainViewModel : ObservableObject
                 Row("Size", TreeBuilder.Size(archive.Data.Length));
                 Row("Root entries", archive.Root.Children.Count);
                 break;
+
+            default:
+                StopAnimation();
+                AvailableAnimations.Clear();
+                _animatedModel = null;
+                _animatedModelNode = null;
+                SelectedAnimation = null;
+        OnPropertyChanged(nameof(HasAnimations));
+        OnPropertyChanged(nameof(IsAnimationAvailable));
+
+        Log($"  IsAnimationAvailable={IsAnimationAvailable}, Model={_animatedModel?.Name}, AnimCount={AvailableAnimations.Count}");
+                break;
         }
         return;
 
@@ -502,7 +538,399 @@ public partial class MainViewModel : ObservableObject
 
     // ---- audio -----------------------------------------------------------
 
-    // ---- commands --------------------------------------------------------
+    // ---- animation --------------------------------------------------------
+    partial void OnSelectedAnimationChanged(RingAnimation? value)
+    {
+        if (value is null)
+        {
+            StopAnimation();
+            _animatedModel = null;
+            _animatedModelNode = null;
+            AvailableAnimations.Clear();
+            _boneNameToIndex.Clear();
+            _boneMatrices = Array.Empty<Matrix4x4>();
+            _animatedPositions = null;
+            _animatedNormals = null;
+            ViewportModel = null;
+            OnPropertyChanged(nameof(HasAnimations));
+            OnPropertyChanged(nameof(IsAnimationAvailable));
+            return;
+        }
+
+        _animationTime = 0;
+        OnPropertyChanged(nameof(AnimationTime));
+        OnPropertyChanged(nameof(AnimationDuration));
+
+        if (_animatedModel is not null)
+        {
+            PrepareAnimation(_animatedModel, value);
+        }
+    }
+
+    private void PrepareAnimation(RingModel model, RingAnimation anim)
+    {
+        _boneNameToIndex = model.Bones
+            .Select((b, i) => (b.Name, i))
+            .Where(t => !string.IsNullOrEmpty(t.Name))
+            .ToDictionary(t => t.Name, t => t.i, StringComparer.OrdinalIgnoreCase);
+
+        _boneMatrices = new Matrix4x4[model.Bones.Count];
+        for (int i = 0; i < model.Bones.Count; i++)
+        {
+            _boneMatrices[i] = FloatsToMatrix(model.Bones[i].Bind);
+        }
+
+        ComputeSkinnedFrame(model, anim, 0);
+        ViewportModel = model;
+    }
+
+    private void FindSiblingAnimations(RingNode? node)
+    {
+        AvailableAnimations.Clear();
+        _animatedModel = null;
+        _animatedModelNode = null;
+        SelectedAnimation = null;
+        _animationTime = 0;
+
+        if (node is null || node.Parent is null)
+        {
+            OnPropertyChanged(nameof(HasAnimations));
+            OnPropertyChanged(nameof(IsAnimationAvailable));
+            return;
+        }
+
+        foreach (var child in node.Parent.Children)
+        {
+            if (child is null || child == node) continue;
+            if (RingAnimation.LooksLikeAnimation(child.Span))
+            {
+                try
+                {
+                    RingAnimation anim = RingAnimation.Parse(child.Span, $"anim{child.Index:00}");
+                    AvailableAnimations.Add(anim);
+                }
+                catch { }
+            }
+            else if (RingModel.LooksLikeModel(child.Span))
+            {
+                try
+                {
+                    RingModel m = RingModel.Parse(child.Span);
+                    if (_animatedModel is null)
+                    {
+                        _animatedModel = m;
+                        _animatedModelNode = child;
+                    }
+                }
+                catch { }
+            }
+        }
+
+        if (_animatedModel is null && node is not null && RingModel.LooksLikeModel(node.Span))
+        {
+            try
+            {
+                _animatedModel = RingModel.Parse(node.Span);
+                _animatedModelNode = node;
+            }
+            catch { }
+        }
+
+        OnPropertyChanged(nameof(HasAnimations));
+        OnPropertyChanged(nameof(IsAnimationAvailable));
+
+        if (_animatedModel is not null && AvailableAnimations.Count > 0)
+        {
+            SelectedAnimation = AvailableAnimations[0];
+            OnPropertyChanged(nameof(SelectedAnimation));
+            PrepareAnimation(_animatedModel, SelectedAnimation);
+        }
+    }
+
+    [RelayCommand]
+    private void PlayAnimation()
+    {
+        if (SelectedAnimation is null || _animatedModel is null) return;
+        _isAnimationPlaying = true;
+        _animationTimer.Start();
+        OnPropertyChanged(nameof(IsAnimationPlaying));
+        Log($"PlayAnimation: anim={SelectedAnimation.Name} duration={SelectedAnimation.Duration:F2}s");
+    }
+
+    [RelayCommand]
+    private void StopAnimation()
+    {
+        _isAnimationPlaying = false;
+        _animationTimer.Stop();
+        _animationTime = 0;
+        OnPropertyChanged(nameof(IsAnimationPlaying));
+        OnPropertyChanged(nameof(AnimationTime));
+        if (_animatedModel is not null && SelectedAnimation is not null)
+        {
+            ComputeSkinnedFrame(_animatedModel, SelectedAnimation, _animationTime);
+        }
+        Log("StopAnimation");
+    }
+
+    private void OnAnimationTick(object? sender, EventArgs e)
+    {
+        if (!_isAnimationPlaying || SelectedAnimation is null || _animatedModel is null) return;
+
+        _animationTime += _animationTimer.Interval.TotalSeconds;
+        if (_animationTime >= SelectedAnimation.Duration)
+        {
+            _animationTime = 0;
+        }
+
+        OnPropertyChanged(nameof(AnimationTime));
+        Log($"Tick t={_animationTime:F3}");
+        ComputeSkinnedFrame(_animatedModel, SelectedAnimation, _animationTime);
+        Log($"TickDone");
+    }
+
+    private void ComputeSkinnedFrame(RingModel model, RingAnimation anim, double timeSeconds)
+    {
+        Log($"ComputeSkinnedFrame START t={timeSeconds:F3}");
+        if (model.Bones.Count == 0)
+        {
+            Log($"ComputeSkinnedFrame END - no bones");
+            return;
+        }
+
+        float timeFrames = (float)(timeSeconds * RingAnimation.Fps);
+
+        Dictionary<string, Matrix4x4> worldTransforms = new(StringComparer.OrdinalIgnoreCase);
+        foreach (var track in anim.Tracks)
+        {
+            if (track.Times.Length == 0) continue;
+            int ki = FindKeyframe(track.Times, timeFrames);
+            int k1 = Math.Min(ki + 1, track.Times.Length - 1);
+            float t0 = track.Times[ki];
+            float t1 = track.Times[k1];
+            float frac = t1 > t0 ? (timeFrames - t0) / (t1 - t0) : 0f;
+            frac = Math.Clamp(frac, 0f, 1f);
+
+            Matrix4x4 m0 = MirrorAnimMatrix(track.Matrices[ki]);
+            Matrix4x4 m1 = MirrorAnimMatrix(track.Matrices[k1]);
+            worldTransforms[track.Name] = LerpMatrix(m0, m1, frac);
+        }
+
+        Log($"  Tracks: {string.Join(", ", anim.Tracks.Take(5).Select(t => t.Name))}");
+        Log($"  BoneNames: {string.Join(", ", model.Bones.Take(5).Select(b => b.Name))}");
+
+        Matrix4x4[] final = new Matrix4x4[model.Bones.Count];
+        int matched = 0;
+        for (int i = 0; i < model.Bones.Count; i++)
+        {
+            RingBone bone = model.Bones[i];
+            Matrix4x4 world = worldTransforms.TryGetValue(bone.Name, out Matrix4x4 wt)
+                ? wt
+                : FloatsToMatrix(bone.Bind);
+            if (worldTransforms.ContainsKey(bone.Name)) matched++;
+            Matrix4x4 inv = FloatsToMatrix(bone.InverseBind);
+            final[i] = world * inv;
+        }
+
+        _boneMatrices = final;
+
+        Log($"AnimFrame t={timeSeconds:F3} tracks={worldTransforms.Count} matched={matched} bones={model.Bones.Count} meshes={model.Meshes.Count}");
+
+        if (model.Bones.Count > 0)
+        {
+            Log($"  Bone0Final={final[0].M41:F3},{final[0].M42:F3},{final[0].M43:F3}");
+        }
+
+        if (_animatedPositions is not null && _animatedPositions.Length >= 9)
+        {
+            Log($"  FirstPos={_animatedPositions[0]:F3},{_animatedPositions[1]:F3},{_animatedPositions[2]:F3}");
+        }
+
+        if (_animatedPositions is null || _animatedNormals is null ||
+            _animatedPositions.Length != model.Meshes.Sum(m => m.VertexCount * 3) ||
+            _animatedNormals.Length != model.Meshes.Sum(m => m.VertexCount * 3))
+        {
+            int totalPos = model.Meshes.Sum(m => m.VertexCount * 3);
+            int totalNrm = model.Meshes.Sum(m => m.VertexCount * 3);
+            _animatedPositions = new float[totalPos];
+            _animatedNormals = new float[totalNrm];
+        }
+
+        int posOffset = 0, nrmOffset = 0;
+        foreach (RingMesh mesh in model.Meshes)
+        {
+            int skinVerts = mesh.SkinPositions.Length / 3;
+            List<(float W, int J)>[] lists = new List<(float W, int J)>[skinVerts];
+            bool any = false;
+
+            for (int b = 0; b < model.Bones.Count; b++)
+            {
+                RingBone bone = model.Bones[b];
+                if (bone.MeshIndex != mesh.NodeIndex) continue;
+                for (int k = 0; k < bone.Weights.Length; k++)
+                {
+                    int v = bone.WeightVertices[k];
+                    float w = bone.Weights[k];
+                    if (v < 0 || v >= skinVerts || w == 0f) continue;
+                    (lists[v] ??= []).Add((w, b));
+                    any = true;
+                }
+            }
+
+            if (!any)
+            {
+                for (int i = 0; i < mesh.VertexCount; i++)
+                {
+                    int baseIdx = posOffset + (i * 3);
+                    _animatedPositions[baseIdx] = mesh.Positions[(i * 3) + 0];
+                    _animatedPositions[baseIdx + 1] = mesh.Positions[(i * 3) + 1];
+                    _animatedPositions[baseIdx + 2] = mesh.Positions[(i * 3) + 2];
+                    _animatedNormals[nrmOffset + (i * 3)] = mesh.Normals[(i * 3) + 0];
+                    _animatedNormals[nrmOffset + (i * 3) + 1] = mesh.Normals[(i * 3) + 1];
+                    _animatedNormals[nrmOffset + (i * 3) + 2] = mesh.Normals[(i * 3) + 2];
+                }
+                posOffset += mesh.VertexCount * 3;
+                nrmOffset += mesh.VertexCount * 3;
+                continue;
+            }
+
+            for (int i = 0; i < mesh.VertexCount; i++)
+            {
+                int sv = mesh.VertexIds[i];
+                List<(float W, int J)>? list = sv >= 0 && sv < skinVerts ? lists[sv] : null;
+                int baseIdx = posOffset + (i * 3);
+                int nrmIdx = nrmOffset + (i * 3);
+
+                if (list is null || list.Count == 0)
+                {
+                    _animatedPositions[baseIdx] = mesh.Positions[(i * 3) + 0];
+                    _animatedPositions[baseIdx + 1] = mesh.Positions[(i * 3) + 1];
+                    _animatedPositions[baseIdx + 2] = mesh.Positions[(i * 3) + 2];
+                    _animatedNormals[nrmIdx] = mesh.Normals[(i * 3) + 0];
+                    _animatedNormals[nrmIdx + 1] = mesh.Normals[(i * 3) + 1];
+                    _animatedNormals[nrmIdx + 2] = mesh.Normals[(i * 3) + 2];
+                    continue;
+                }
+
+                Vector3 sp = new(mesh.Positions[(i * 3) + 0], mesh.Positions[(i * 3) + 1], mesh.Positions[(i * 3) + 2]);
+                Vector3 sn = new(mesh.Normals[(i * 3) + 0], mesh.Normals[(i * 3) + 1], mesh.Normals[(i * 3) + 2]);
+
+                float w0 = 0f, w1 = 0f, w2 = 0f, w3 = 0f;
+                int j0 = 0, j1 = 0, j2 = 0, j3 = 0;
+
+                foreach (var item in list)
+                {
+                    if (item.W <= 0f) continue;
+                    if (item.W > w0)
+                    {
+                        w3 = w2; j3 = j2;
+                        w2 = w1; j2 = j1;
+                        w1 = w0; j1 = j0;
+                        w0 = item.W; j0 = item.J;
+                    }
+                    else if (item.W > w1)
+                    {
+                        w3 = w2; j3 = j2;
+                        w2 = w1; j2 = j1;
+                        w1 = item.W; j1 = item.J;
+                    }
+                    else if (item.W > w2)
+                    {
+                        w3 = w2; j3 = j2;
+                        w2 = item.W; j2 = item.J;
+                    }
+                    else if (item.W > w3)
+                    {
+                        w3 = item.W; j3 = item.J;
+                    }
+                }
+
+                float sum = w0 + w1 + w2 + w3;
+                if (sum > 0f)
+                {
+                    w0 /= sum; w1 /= sum; w2 /= sum; w3 /= sum;
+                }
+
+                Vector3 tp = Vector3.Zero;
+                Vector3 tn = Vector3.Zero;
+
+                void Accumulate(int ji, float w, ref Vector3 p, ref Vector3 n)
+                {
+                    if (w <= 0f || ji < 0 || ji >= final.Length) return;
+                    Matrix4x4 m = final[ji];
+                    p += Vector3.Transform(sp, m) * w;
+                    n += Vector3.TransformNormal(sn, m) * w;
+                }
+
+                Accumulate(j0, w0, ref tp, ref tn);
+                Accumulate(j1, w1, ref tp, ref tn);
+                Accumulate(j2, w2, ref tp, ref tn);
+                Accumulate(j3, w3, ref tp, ref tn);
+
+                _animatedPositions[posOffset + (i * 3) + 0] = tp.X;
+                _animatedPositions[posOffset + (i * 3) + 1] = tp.Y;
+                _animatedPositions[posOffset + (i * 3) + 2] = tp.Z;
+                _animatedNormals[nrmOffset + (i * 3) + 0] = tn.X;
+                _animatedNormals[nrmOffset + (i * 3) + 1] = tn.Y;
+                _animatedNormals[nrmOffset + (i * 3) + 2] = tn.Z;
+            }
+
+            posOffset += mesh.VertexCount * 3;
+            nrmOffset += mesh.VertexCount * 3;
+        }
+
+        if (Viewport is not null)
+        {
+            Viewport.SetAnimatedFrame(_animatedPositions, _animatedNormals);
+        }
+
+        float minDelta = float.MaxValue, maxDelta = float.MinValue;
+        int checkCount = Math.Min(_animatedPositions.Length, model.Meshes[0].Positions.Length);
+        for (int i = 0; i < checkCount; i++)
+        {
+            float delta = Math.Abs(_animatedPositions[i] - model.Meshes[0].Positions[i]);
+            minDelta = Math.Min(minDelta, delta);
+            maxDelta = Math.Max(maxDelta, delta);
+        }
+        Log($"  PosDelta min={minDelta:F4} max={maxDelta:F4}");
+        Log($"ComputeSkinnedFrame END");
+    }
+
+    private static int FindKeyframe(float[] times, float t)
+    {
+        for (int i = times.Length - 1; i >= 0; i--)
+        {
+            if (times[i] <= t) return i;
+        }
+        return 0;
+    }
+
+    private static Matrix4x4 LerpMatrix(Matrix4x4 a, Matrix4x4 b, float t)
+    {
+        return new Matrix4x4(
+            a.M11 + (b.M11 - a.M11) * t, a.M12 + (b.M12 - a.M12) * t, a.M13 + (b.M13 - a.M13) * t, a.M14 + (b.M14 - a.M14) * t,
+            a.M21 + (b.M21 - a.M21) * t, a.M22 + (b.M22 - a.M22) * t, a.M23 + (b.M23 - a.M23) * t, a.M24 + (b.M24 - a.M24) * t,
+            a.M31 + (b.M31 - a.M31) * t, a.M32 + (b.M32 - a.M32) * t, a.M33 + (b.M33 - a.M33) * t, a.M34 + (b.M34 - a.M34) * t,
+            a.M41 + (b.M41 - a.M41) * t, a.M42 + (b.M42 - a.M42) * t, a.M43 + (b.M43 - a.M43) * t, a.M44 + (b.M44 - a.M44) * t);
+    }
+
+    private static Matrix4x4 FloatsToMatrix(float[] m)
+    {
+        return new Matrix4x4(
+            m[0], m[1], m[2], m[3],
+            m[4], m[5], m[6], m[7],
+            m[8], m[9], m[10], m[11],
+            m[12], m[13], m[14], m[15]);
+    }
+
+    private static Matrix4x4 MirrorAnimMatrix(float[] m)
+    {
+        return new Matrix4x4(
+            -m[0], -m[1], -m[2], m[3],
+            m[4], m[5], m[6], m[7],
+            -m[8], -m[9], -m[10], m[11],
+            -m[12], m[13], -m[14], m[15]);
+    }
+
     [RelayCommand]
     private async Task OpenAsync()
     {
@@ -529,12 +957,17 @@ public partial class MainViewModel : ObservableObject
         if (_open.Count > 0)
         {
             ResetAudioState();
+            StopAnimation();
             Roots.Clear();
             _open.Clear();
             Properties.Clear();
             ViewportModel = null;
             TexturePreview = null;
             SearchFilter = "";
+            AvailableAnimations.Clear();
+            _animatedModel = null;
+            _animatedModelNode = null;
+            SelectedAnimation = null;
         }
 
         Status = $"Opening {Path.GetFileName(path)}…";
@@ -558,12 +991,17 @@ public partial class MainViewModel : ObservableObject
     private void CloseAll()
     {
         ResetAudioState();
+        StopAnimation();
         Roots.Clear();
         _open.Clear();
         Properties.Clear();
         ViewportModel = null;
         TexturePreview = null;
         SearchFilter = "";
+        AvailableAnimations.Clear();
+        _animatedModel = null;
+        _animatedModelNode = null;
+        SelectedAnimation = null;
         Log("Closed all archives.");
     }
 
