@@ -92,7 +92,7 @@ public partial class DopeSheetView : UserControl
 
             foreach (float t in anim.Tracks[i].Times)
             {
-                double x = headerWidth + t * timeScale;
+                double x = headerWidth + (t / RingAnimation.Fps) * timeScale;
                 context.DrawLine(keyframePen, new Point(x, y + 2), new Point(x, y + trackHeight - 2));
             }
         }

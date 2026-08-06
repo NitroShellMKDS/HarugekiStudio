@@ -162,13 +162,15 @@ public sealed class RingBone
     public int Related { get; init; }
     public int ParentNodeIndex => Related - 1;
     public int MeshIndex { get; init; }
-    /// <summary>Row-major 4x4, D3D row-vector convention. Converted to Blender XZY
-    /// space at parse time: X and Z basis rows and their translation components
-    /// are negated so the matrix expresses the same transform in standard
-    /// right-handed coordinates where Blender Y is up.</summary>
+    /// <summary>Row-major 4x4 <b>world-space</b> bind transform, D3D row-vector
+    /// convention. Mirrored at parse time by <see cref="AssetTypes.MirrorTransform"/>
+    /// so it expresses the same transform in the standard right-handed space the
+    /// vertex positions were converted to.</summary>
     public float[] Bind { get; init; } = new float[16];
-    /// <summary>Row-major 4x4 inverse of <see cref="Bind"/>, converted with the
-    /// same X/Z mirror so it remains the true inverse after the coordinate fix.</summary>
+    /// <summary>Row-major 4x4 inverse of <see cref="Bind"/>, mirrored the same way
+    /// so it remains the true inverse after the coordinate fix. A handful of
+    /// weightless dynamic-bone anchors store something here that is not actually
+    /// the inverse of their bind matrix, so prefer inverting <see cref="Bind"/>.</summary>
     public float[] InverseBind { get; init; } = new float[16];
     public int[] WeightVertices { get; init; } = [];
     public float[] Weights { get; init; } = [];
@@ -189,22 +191,13 @@ public sealed class RingBone
             inv[i] = AssetTypes.F32(blob, off + 0xC8 + (i * 4));
         }
 
-        // File coordinates are left-handed with width and height mirrored.
-        // Conjugate both bind and inverse-bind by diag(-1, 1, -1, 1) so they
-        // describe the same transforms in standard right-handed X/Y/Z space.
-        // Negate X basis row (0,1,2), keep Y row (4,5,6), negate Z row (8,9,10),
-        // and negate X/Z in the translation row (12,14), keep Y (13).
-        int[] negBind = [0, 1, 2, 8, 9, 10, 12, 14];
-        foreach (int i in negBind)
-        {
-            bind[i] = -bind[i];
-        }
-
-        int[] negInv = [0, 1, 2, 8, 9, 10, 12, 14];
-        foreach (int i in negInv)
-        {
-            inv[i] = -inv[i];
-        }
+        // File coordinates are left-handed with X and Z mirrored. Conjugate both
+        // bind and inverse-bind by diag(-1, 1, -1, 1) so they describe the same
+        // transforms in standard right-handed X/Y/Z space, matching the vertex
+        // positions above. See AssetTypes.MirrorTransform for why this is a
+        // conjugation and not a row negation.
+        AssetTypes.MirrorTransform(bind);
+        AssetTypes.MirrorTransform(inv);
 
         int[] verts = new int[n];
         float[] weights = new float[n];

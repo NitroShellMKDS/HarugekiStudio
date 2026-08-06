@@ -4,14 +4,14 @@ using Avalonia.Input;
 using Avalonia.Markup.Xaml;
 using HarugekiStudio.Rendering;
 using HarugekiStudio.ViewModels;
-using System.Collections.Specialized;
+using System.ComponentModel;
 
 namespace HarugekiStudio.Views;
 
 public partial class MainWindow : Window
 {
     private MainViewModel? _currentVm;
-    private NotifyCollectionChangedEventHandler? _consoleCollectionChangedHandler;
+    private PropertyChangedEventHandler? _consolePropertyChangedHandler;
     private Action? _resetViewHandler;
 
     // Cached control references — FindControl traverses the tree on every call,
@@ -48,13 +48,13 @@ public partial class MainWindow : Window
             _currentVm.ResetViewRequested -= _resetViewHandler;
         }
 
-        if (_consoleCollectionChangedHandler is not null)
+        if (_consolePropertyChangedHandler is not null)
         {
-            _currentVm.Console.CollectionChanged -= _consoleCollectionChangedHandler;
+            _currentVm.PropertyChanged -= _consolePropertyChangedHandler;
         }
 
         _resetViewHandler = null;
-        _consoleCollectionChangedHandler = null;
+        _consolePropertyChangedHandler = null;
         _currentVm = null;
     }
 
@@ -69,12 +69,22 @@ public partial class MainWindow : Window
 
         _currentVm = vm;
 
+        if (_vp is not null)
+        {
+            vm.Viewport = _vp;
+        }
+
         _resetViewHandler = () => _vp?.ResetCamera();
         vm.ResetViewRequested += _resetViewHandler;
 
-        _consoleCollectionChangedHandler = (_, _) =>
-            Avalonia.Threading.Dispatcher.UIThread.Post(() => _consoleScroll?.ScrollToEnd());
-        vm.Console.CollectionChanged += _consoleCollectionChangedHandler;
+        _consolePropertyChangedHandler = (_, args) =>
+        {
+            if (args.PropertyName == nameof(MainViewModel.ConsoleText))
+            {
+                Avalonia.Threading.Dispatcher.UIThread.Post(() => _consoleScroll?.ScrollToEnd());
+            }
+        };
+        vm.PropertyChanged += _consolePropertyChangedHandler;
     }
 
     protected override void OnClosed(EventArgs e)

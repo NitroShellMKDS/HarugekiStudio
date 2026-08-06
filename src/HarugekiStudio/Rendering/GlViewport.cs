@@ -16,6 +16,7 @@ internal static class Gl
 {
     public const int Lines = 0x0001;
     public const int Repeat = 0x2901;
+    public const int DynamicDraw = 0x88E8;
 }
 
 /// <summary>
@@ -68,6 +69,8 @@ public class GlViewport : OpenGlControlBase
     private bool _ready;
     private float[]? _animPositions;
     private float[]? _animNormals;
+    private byte[]? _animVertScratch;
+    private byte[]? _animLineScratch;
 
     // ---- per-frame scratch (pre-allocated to avoid heap pressure) --------
     private readonly float[] _matScratch = new float[16];
@@ -250,6 +253,8 @@ public class GlViewport : OpenGlControlBase
         _axisVertexCount = 0;
         _animPositions = null;
         _animNormals = null;
+        _animVertScratch = null;
+        _animLineScratch = null;
         _ready = false;
         _dirty = true;
     }
@@ -425,6 +430,9 @@ public class GlViewport : OpenGlControlBase
         _vertexCount = v;
         _lineVertexCount = l / Stride;
 
+        _animVertScratch = new byte[_vertexCount * Stride];
+        _animLineScratch = new byte[_lineVertexCount * Stride];
+
         gl.BindBuffer(GL_ARRAY_BUFFER, _vbo);
         BufferData(gl, verts, _vertexCount * Stride);
         gl.BindBuffer(GL_ARRAY_BUFFER, _lineVbo);
@@ -449,13 +457,12 @@ public class GlViewport : OpenGlControlBase
 
     private void ApplyAnimatedFrame(GlInterface gl)
     {
-        if (_animPositions is null || _animNormals is null) return;
+        if (_animPositions is null || _animNormals is null || _animVertScratch is null || _animLineScratch is null) return;
         RingModel? model = Model;
         if (model is null || model.Meshes.Count == 0) return;
 
-        int total = model.Meshes.Sum(m => m.VertexCount);
-        byte[] verts = new byte[total * Stride];
-        byte[] lines = new byte[total * 2 * Stride];
+        byte[] verts = _animVertScratch;
+        byte[] lines = _animLineScratch;
         int v = 0, l = 0;
         int posOffset = 0, nrmOffset = 0;
 
@@ -482,9 +489,9 @@ public class GlViewport : OpenGlControlBase
         }
 
         gl.BindBuffer(GL_ARRAY_BUFFER, _vbo);
-        BufferData(gl, verts, total * Stride);
+        BufferDataDynamic(gl, verts, v * Stride);
         gl.BindBuffer(GL_ARRAY_BUFFER, _lineVbo);
-        BufferData(gl, lines, total * 2 * Stride);
+        BufferDataDynamic(gl, lines, l);
         gl.BindBuffer(GL_ARRAY_BUFFER, 0);
     }
 
@@ -537,6 +544,13 @@ public class GlViewport : OpenGlControlBase
         }
     }
 
+    public void ClearAnimatedFrame()
+    {
+        _animPositions = null;
+        _animNormals = null;
+        RequestNextFrameRendering();
+    }
+
     private void ReleaseModel(GlInterface gl)
     {
         foreach (int t in _textures)
@@ -545,6 +559,8 @@ public class GlViewport : OpenGlControlBase
         }
 
         _textures.Clear();
+        _animVertScratch = null;
+        _animLineScratch = null;
     }
 
     private void BuildGrid(GlInterface gl)
@@ -611,6 +627,13 @@ public class GlViewport : OpenGlControlBase
     {
         GCHandle handle = GCHandle.Alloc(data, GCHandleType.Pinned);
         try { gl.BufferData(GL_ARRAY_BUFFER, new IntPtr(length), handle.AddrOfPinnedObject(), GL_STATIC_DRAW); }
+        finally { handle.Free(); }
+    }
+
+    private static void BufferDataDynamic(GlInterface gl, byte[] data, int length)
+    {
+        GCHandle handle = GCHandle.Alloc(data, GCHandleType.Pinned);
+        try { gl.BufferData(GL_ARRAY_BUFFER, new IntPtr(length), handle.AddrOfPinnedObject(), Gl.DynamicDraw); }
         finally { handle.Free(); }
     }
 

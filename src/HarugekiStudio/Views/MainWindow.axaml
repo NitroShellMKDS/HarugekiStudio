@@ -179,21 +179,16 @@
                       HorizontalAlignment="Stretch" />
 
         <!-- bottom tabs: Console | Animation -->
-        <TabControl Grid.Row="3" Background="#1A1A1A">
+        <TabControl Grid.Row="2" Background="#1A1A1A">
           <TabItem Header="Console">
             <Border Background="#181818" BorderBrush="#333" BorderThickness="0,1,0,0">
               <DockPanel>
                 <TextBlock DockPanel.Dock="Top" Text="Console" Margin="8,4"
                            Foreground="#AAA" FontWeight="SemiBold" />
                 <ScrollViewer Name="ConsoleScroll">
-                  <ItemsControl ItemsSource="{Binding Console}" Margin="8,0,8,8">
-                    <ItemsControl.ItemTemplate>
-                      <DataTemplate>
-                        <TextBlock Text="{Binding}" Foreground="#9CDCFE"
-                                   FontFamily="Consolas,monospace" FontSize="11" />
-                      </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                  </ItemsControl>
+                  <SelectableTextBlock Text="{Binding ConsoleText}" Margin="8,0,8,8"
+                                       Foreground="#9CDCFE"
+                                       FontFamily="Consolas,monospace" FontSize="11" />
                 </ScrollViewer>
               </DockPanel>
             </Border>

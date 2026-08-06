@@ -47,6 +47,35 @@ public static class AssetTypes
             && blob[11] == 0x45;
     }
 
+    /// <summary>
+    /// Mirrors a row-major 4x4 transform in place so it describes the same
+    /// motion after vertex positions have had their X and Z negated.
+    ///
+    /// <para>
+    /// This is a <b>conjugation</b> by <c>S = diag(-1, 1, -1, 1)</c>, not a plain
+    /// row or column negation: the mirrored matrix is <c>S·M·S</c>, so element
+    /// (i, j) flips exactly when one — and only one — of i and j is a mirrored
+    /// axis. Conjugation is what makes the mirror a homomorphism, i.e.
+    /// <c>mirror(A)·mirror(B) == mirror(A·B)</c> and
+    /// <c>mirror(A)⁻¹ == mirror(A⁻¹)</c>. Anything else breaks the moment two
+    /// mirrored matrices are composed, which is exactly what skinning does when
+    /// it builds <c>inverseBind · animatedWorld</c>.
+    /// </para>
+    /// </summary>
+    public static void MirrorTransform(Span<float> m)
+    {
+        if (m.Length < 16)
+        {
+            throw new ArgumentException("expected a 4x4 matrix", nameof(m));
+        }
+
+        // (0,1) (0,3) (1,0) (1,2) (2,1) (2,3) (3,0) (3,2)
+        foreach (int i in (ReadOnlySpan<int>)[1, 3, 4, 6, 9, 11, 12, 14])
+        {
+            m[i] = -m[i];
+        }
+    }
+
     internal static string ReadName(ReadOnlySpan<byte> blob, int offset, int max)
     {
         if (offset >= blob.Length)

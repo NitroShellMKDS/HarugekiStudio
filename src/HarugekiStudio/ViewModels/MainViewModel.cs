@@ -34,6 +34,7 @@ public partial class MainViewModel : ObservableObject
     private bool _isAnimationPlaying;
     private double _animationTime;
     private readonly DispatcherTimer _animationTimer;
+    private readonly Stopwatch _animStopwatch = new();
     private Dictionary<string, int> _boneNameToIndex = new();
     private Matrix4x4[] _boneMatrices = Array.Empty<Matrix4x4>();
     private float[]? _animatedPositions;
@@ -55,7 +56,8 @@ public partial class MainViewModel : ObservableObject
     public ObservableCollection<TreeItemViewModel> Roots { get; } = [];
     public ObservableCollection<TreeItemViewModel> SearchResults { get; } = [];
     public ObservableCollection<PropertyRow> Properties { get; } = [];
-    public ObservableCollection<string> Console { get; } = [];
+    private readonly System.Text.StringBuilder _consoleText = new();
+    public string ConsoleText => _consoleText.ToString();
     public ObservableCollection<RingAnimation> AvailableAnimations { get; } = [];
     public Array ShadingModes { get; } = Enum.GetValues<ShadingMode>();
 
@@ -371,11 +373,27 @@ public partial class MainViewModel : ObservableObject
 
     private void Log(string line)
     {
-        Console.Add($"[{DateTime.Now:HH:mm:ss}] {line}");
+        _consoleText.AppendLine($"[{DateTime.Now:HH:mm:ss}] {line}");
+        OnPropertyChanged(nameof(ConsoleText));
         Status = line;
-        if (Console.Count > MaxConsoleLines)
+        TrimConsole();
+    }
+
+    private void TrimConsole()
+    {
+        int lineCount = 1;
+        int firstNewLine = -1;
+        for (int i = 0; i < _consoleText.Length; i++)
         {
-            Console.RemoveAt(0);
+            if (_consoleText[i] == '\n')
+            {
+                lineCount++;
+                if (firstNewLine < 0) firstNewLine = i;
+            }
+        }
+        if (lineCount > MaxConsoleLines && firstNewLine >= 0)
+        {
+            _consoleText.Remove(0, firstNewLine + 1);
         }
     }
 
@@ -403,7 +421,7 @@ public partial class MainViewModel : ObservableObject
         {
             case ModelAsset m:
                 ShowModel(m.Model);
-                FindSiblingAnimations(m.Node);
+                FindSiblingAnimations(m.Model, m.Node);
                 Row("Name", m.Model.Name);
                 Row("Bones", m.Model.Bones.Count);
                 Row("Meshes", m.Model.Meshes.Count);
@@ -416,7 +434,7 @@ public partial class MainViewModel : ObservableObject
 
             case MeshAsset ms:
                 ShowModel(ms.Model);
-                FindSiblingAnimations(ms.Node);
+                FindSiblingAnimations(ms.Model, ms.Node);
                 Row("Name", ms.Mesh.Name);
                 Row("Triangles", ms.Mesh.TriangleCount);
                 Row("Draw vertices", ms.Mesh.VertexCount);
@@ -485,10 +503,9 @@ public partial class MainViewModel : ObservableObject
                 _animatedModel = null;
                 _animatedModelNode = null;
                 SelectedAnimation = null;
-        OnPropertyChanged(nameof(HasAnimations));
-        OnPropertyChanged(nameof(IsAnimationAvailable));
-
-        Log($"  IsAnimationAvailable={IsAnimationAvailable}, Model={_animatedModel?.Name}, AnimCount={AvailableAnimations.Count}");
+                ViewportModel = null;
+                OnPropertyChanged(nameof(HasAnimations));
+                OnPropertyChanged(nameof(IsAnimationAvailable));
                 break;
         }
         return;
@@ -498,6 +515,7 @@ public partial class MainViewModel : ObservableObject
 
     private void ShowModel(RingModel model)
     {
+        Viewport?.ClearAnimatedFrame();
         ViewportModel = model;
         SelectedPane = 0;
     }
@@ -543,21 +561,25 @@ public partial class MainViewModel : ObservableObject
     {
         if (value is null)
         {
-            StopAnimation();
-            _animatedModel = null;
-            _animatedModelNode = null;
-            AvailableAnimations.Clear();
+            _isAnimationPlaying = false;
+            _animStopwatch.Stop();
+            _animationTimer.Stop();
+            _animationTime = 0;
             _boneNameToIndex.Clear();
             _boneMatrices = Array.Empty<Matrix4x4>();
             _animatedPositions = null;
             _animatedNormals = null;
-            ViewportModel = null;
+            Viewport?.ClearAnimatedFrame();
+            OnPropertyChanged(nameof(IsAnimationPlaying));
+            OnPropertyChanged(nameof(AnimationTime));
+            OnPropertyChanged(nameof(AnimationDuration));
             OnPropertyChanged(nameof(HasAnimations));
             OnPropertyChanged(nameof(IsAnimationAvailable));
             return;
         }
 
         _animationTime = 0;
+        if (_isAnimationPlaying) _animStopwatch.Restart();
         OnPropertyChanged(nameof(AnimationTime));
         OnPropertyChanged(nameof(AnimationDuration));
 
@@ -574,6 +596,14 @@ public partial class MainViewModel : ObservableObject
             .Where(t => !string.IsNullOrEmpty(t.Name))
             .ToDictionary(t => t.Name, t => t.i, StringComparer.OrdinalIgnoreCase);
 
+        HashSet<string> meshNames = model.Meshes
+            .Select(m => m.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        int boneHits = anim.Tracks.Count(t => _boneNameToIndex.ContainsKey(t.Name));
+        int meshHits = anim.Tracks.Count(t => meshNames.Contains(t.Name));
+        Log($"Animation '{anim.Name}': {boneHits}/{model.Bones.Count} bones and " +
+            $"{meshHits}/{model.Meshes.Count} meshes driven by {anim.Tracks.Count} tracks.");
+
         _boneMatrices = new Matrix4x4[model.Bones.Count];
         for (int i = 0; i < model.Bones.Count; i++)
         {
@@ -581,70 +611,50 @@ public partial class MainViewModel : ObservableObject
         }
 
         ComputeSkinnedFrame(model, anim, 0);
-        ViewportModel = model;
     }
 
-    private void FindSiblingAnimations(RingNode? node)
+    /// <summary>
+    /// Collects the animation clips that sit alongside <paramref name="node"/> and
+    /// binds them to the model actually on screen.
+    ///
+    /// <para>
+    /// The model being viewed is the model to animate. That sounds obvious, but a
+    /// container can hold more than one: every alt costume stores its detachable
+    /// hat, ear or hair band as a second model beside the character. Searching the
+    /// siblings for a model to animate finds the wrong one of the pair — the
+    /// character's clips get skinned onto a bone-less accessory, or the accessory
+    /// gets shown with a vertex buffer sized for the character's meshes.
+    /// </para>
+    /// </summary>
+    private void FindSiblingAnimations(RingModel model, RingNode? node)
     {
         AvailableAnimations.Clear();
-        _animatedModel = null;
-        _animatedModelNode = null;
         SelectedAnimation = null;
         _animationTime = 0;
+        _animatedModel = model;
+        _animatedModelNode = node;
 
-        if (node is null || node.Parent is null)
+        foreach (RingNode? child in node?.Parent?.Children ?? [])
         {
-            OnPropertyChanged(nameof(HasAnimations));
-            OnPropertyChanged(nameof(IsAnimationAvailable));
-            return;
-        }
-
-        foreach (var child in node.Parent.Children)
-        {
-            if (child is null || child == node) continue;
-            if (RingAnimation.LooksLikeAnimation(child.Span))
+            if (child is null || !RingAnimation.LooksLikeAnimation(child.Span))
             {
-                try
-                {
-                    RingAnimation anim = RingAnimation.Parse(child.Span, $"anim{child.Index:00}");
-                    AvailableAnimations.Add(anim);
-                }
-                catch { }
+                continue;
             }
-            else if (RingModel.LooksLikeModel(child.Span))
-            {
-                try
-                {
-                    RingModel m = RingModel.Parse(child.Span);
-                    if (_animatedModel is null)
-                    {
-                        _animatedModel = m;
-                        _animatedModelNode = child;
-                    }
-                }
-                catch { }
-            }
-        }
 
-        if (_animatedModel is null && node is not null && RingModel.LooksLikeModel(node.Span))
-        {
             try
             {
-                _animatedModel = RingModel.Parse(node.Span);
-                _animatedModelNode = node;
+                AvailableAnimations.Add(RingAnimation.Parse(child.Span, $"anim{child.Index:00}"));
             }
             catch { }
         }
 
-        OnPropertyChanged(nameof(HasAnimations));
-        OnPropertyChanged(nameof(IsAnimationAvailable));
-
-        if (_animatedModel is not null && AvailableAnimations.Count > 0)
+        if (AvailableAnimations.Count > 0)
         {
             SelectedAnimation = AvailableAnimations[0];
-            OnPropertyChanged(nameof(SelectedAnimation));
-            PrepareAnimation(_animatedModel, SelectedAnimation);
         }
+
+        OnPropertyChanged(nameof(HasAnimations));
+        OnPropertyChanged(nameof(IsAnimationAvailable));
     }
 
     [RelayCommand]
@@ -652,48 +662,43 @@ public partial class MainViewModel : ObservableObject
     {
         if (SelectedAnimation is null || _animatedModel is null) return;
         _isAnimationPlaying = true;
+        _animStopwatch.Restart();
         _animationTimer.Start();
         OnPropertyChanged(nameof(IsAnimationPlaying));
-        Log($"PlayAnimation: anim={SelectedAnimation.Name} duration={SelectedAnimation.Duration:F2}s");
     }
 
     [RelayCommand]
     private void StopAnimation()
     {
         _isAnimationPlaying = false;
+        _animStopwatch.Stop();
         _animationTimer.Stop();
         _animationTime = 0;
+        _animatedPositions = null;
+        _animatedNormals = null;
+        Viewport?.ClearAnimatedFrame();
         OnPropertyChanged(nameof(IsAnimationPlaying));
         OnPropertyChanged(nameof(AnimationTime));
-        if (_animatedModel is not null && SelectedAnimation is not null)
-        {
-            ComputeSkinnedFrame(_animatedModel, SelectedAnimation, _animationTime);
-        }
-        Log("StopAnimation");
     }
 
     private void OnAnimationTick(object? sender, EventArgs e)
     {
         if (!_isAnimationPlaying || SelectedAnimation is null || _animatedModel is null) return;
 
-        _animationTime += _animationTimer.Interval.TotalSeconds;
-        if (_animationTime >= SelectedAnimation.Duration)
-        {
-            _animationTime = 0;
-        }
+        double duration = SelectedAnimation.Duration;
+        _animationTime = duration > 0 ? _animStopwatch.Elapsed.TotalSeconds % duration : 0;
 
         OnPropertyChanged(nameof(AnimationTime));
-        Log($"Tick t={_animationTime:F3}");
         ComputeSkinnedFrame(_animatedModel, SelectedAnimation, _animationTime);
-        Log($"TickDone");
     }
 
     private void ComputeSkinnedFrame(RingModel model, RingAnimation anim, double timeSeconds)
     {
-        Log($"ComputeSkinnedFrame START t={timeSeconds:F3}");
-        if (model.Bones.Count == 0)
+        // A bone-less model is still animatable: the detachable accessories that
+        // ship beside the alt costumes are a single rigid mesh driven by a track
+        // of their own name, so only a model with nothing to draw is a no-op.
+        if (model.Meshes.Count == 0)
         {
-            Log($"ComputeSkinnedFrame END - no bones");
             return;
         }
 
@@ -712,47 +717,31 @@ public partial class MainViewModel : ObservableObject
 
             Matrix4x4 m0 = MirrorAnimMatrix(track.Matrices[ki]);
             Matrix4x4 m1 = MirrorAnimMatrix(track.Matrices[k1]);
-            worldTransforms[track.Name] = LerpMatrix(m0, m1, frac);
+            worldTransforms[track.Name] = BlendMatrix(m0, m1, frac);
         }
 
-        Log($"  Tracks: {string.Join(", ", anim.Tracks.Take(5).Select(t => t.Name))}");
-        Log($"  BoneNames: {string.Join(", ", model.Bones.Take(5).Select(b => b.Name))}");
-
+        // Keys are absolute world transforms, not parent-relative, so no chain
+        // accumulation: the skinning matrix for a bone is its own inverse bind
+        // followed by its own animated world transform. A bone with no track
+        // keeps its bind pose, which falls out as the identity here.
         Matrix4x4[] final = new Matrix4x4[model.Bones.Count];
-        int matched = 0;
         for (int i = 0; i < model.Bones.Count; i++)
         {
             RingBone bone = model.Bones[i];
-            Matrix4x4 world = worldTransforms.TryGetValue(bone.Name, out Matrix4x4 wt)
-                ? wt
-                : FloatsToMatrix(bone.Bind);
-            if (worldTransforms.ContainsKey(bone.Name)) matched++;
-            Matrix4x4 inv = FloatsToMatrix(bone.InverseBind);
-            final[i] = world * inv;
+            Matrix4x4 bind = FloatsToMatrix(bone.Bind);
+            Matrix4x4 world = worldTransforms.TryGetValue(bone.Name, out Matrix4x4 wt) ? wt : bind;
+            if (!Matrix4x4.Invert(bind, out Matrix4x4 inv))
+                inv = Matrix4x4.Identity;
+            final[i] = inv * world;
         }
 
         _boneMatrices = final;
 
-        Log($"AnimFrame t={timeSeconds:F3} tracks={worldTransforms.Count} matched={matched} bones={model.Bones.Count} meshes={model.Meshes.Count}");
-
-        if (model.Bones.Count > 0)
+        int animTotal = model.Meshes.Sum(m => m.VertexCount * 3);
+        if (_animatedPositions is null || _animatedNormals is null || _animatedPositions.Length != animTotal)
         {
-            Log($"  Bone0Final={final[0].M41:F3},{final[0].M42:F3},{final[0].M43:F3}");
-        }
-
-        if (_animatedPositions is not null && _animatedPositions.Length >= 9)
-        {
-            Log($"  FirstPos={_animatedPositions[0]:F3},{_animatedPositions[1]:F3},{_animatedPositions[2]:F3}");
-        }
-
-        if (_animatedPositions is null || _animatedNormals is null ||
-            _animatedPositions.Length != model.Meshes.Sum(m => m.VertexCount * 3) ||
-            _animatedNormals.Length != model.Meshes.Sum(m => m.VertexCount * 3))
-        {
-            int totalPos = model.Meshes.Sum(m => m.VertexCount * 3);
-            int totalNrm = model.Meshes.Sum(m => m.VertexCount * 3);
-            _animatedPositions = new float[totalPos];
-            _animatedNormals = new float[totalNrm];
+            _animatedPositions = new float[animTotal];
+            _animatedNormals = new float[animTotal];
         }
 
         int posOffset = 0, nrmOffset = 0;
@@ -778,15 +767,39 @@ public partial class MainViewModel : ObservableObject
 
             if (!any)
             {
+                // Rigid mesh. Its own track is an absolute world transform, so use
+                // that whenever the clip carries one.
+                Matrix4x4 rigidMat = worldTransforms.TryGetValue(mesh.Name, out Matrix4x4 meshWorld)
+                    ? meshWorld
+                    : RigidFallback(model, mesh, final);
+
                 for (int i = 0; i < mesh.VertexCount; i++)
                 {
+                    int sv = mesh.VertexIds[i];
                     int baseIdx = posOffset + (i * 3);
-                    _animatedPositions[baseIdx] = mesh.Positions[(i * 3) + 0];
-                    _animatedPositions[baseIdx + 1] = mesh.Positions[(i * 3) + 1];
-                    _animatedPositions[baseIdx + 2] = mesh.Positions[(i * 3) + 2];
-                    _animatedNormals[nrmOffset + (i * 3)] = mesh.Normals[(i * 3) + 0];
-                    _animatedNormals[nrmOffset + (i * 3) + 1] = mesh.Normals[(i * 3) + 1];
-                    _animatedNormals[nrmOffset + (i * 3) + 2] = mesh.Normals[(i * 3) + 2];
+                    int nrmIdx = nrmOffset + (i * 3);
+                    if (sv >= 0 && sv < skinVerts)
+                    {
+                        Vector3 sp = new(mesh.SkinPositions[sv * 3], mesh.SkinPositions[(sv * 3) + 1], mesh.SkinPositions[(sv * 3) + 2]);
+                        Vector3 sn = new(mesh.SkinNormals[sv * 3], mesh.SkinNormals[(sv * 3) + 1], mesh.SkinNormals[(sv * 3) + 2]);
+                        Vector3 tp = Vector3.Transform(sp, rigidMat);
+                        Vector3 tn = Vector3.TransformNormal(sn, rigidMat);
+                        _animatedPositions[baseIdx] = tp.X;
+                        _animatedPositions[baseIdx + 1] = tp.Y;
+                        _animatedPositions[baseIdx + 2] = tp.Z;
+                        _animatedNormals[nrmIdx] = tn.X;
+                        _animatedNormals[nrmIdx + 1] = tn.Y;
+                        _animatedNormals[nrmIdx + 2] = tn.Z;
+                    }
+                    else
+                    {
+                        _animatedPositions[baseIdx] = mesh.Positions[(i * 3) + 0];
+                        _animatedPositions[baseIdx + 1] = mesh.Positions[(i * 3) + 1];
+                        _animatedPositions[baseIdx + 2] = mesh.Positions[(i * 3) + 2];
+                        _animatedNormals[nrmIdx] = mesh.Normals[(i * 3) + 0];
+                        _animatedNormals[nrmIdx + 1] = mesh.Normals[(i * 3) + 1];
+                        _animatedNormals[nrmIdx + 2] = mesh.Normals[(i * 3) + 2];
+                    }
                 }
                 posOffset += mesh.VertexCount * 3;
                 nrmOffset += mesh.VertexCount * 3;
@@ -811,8 +824,8 @@ public partial class MainViewModel : ObservableObject
                     continue;
                 }
 
-                Vector3 sp = new(mesh.Positions[(i * 3) + 0], mesh.Positions[(i * 3) + 1], mesh.Positions[(i * 3) + 2]);
-                Vector3 sn = new(mesh.Normals[(i * 3) + 0], mesh.Normals[(i * 3) + 1], mesh.Normals[(i * 3) + 2]);
+                Vector3 sp = new(mesh.SkinPositions[sv * 3], mesh.SkinPositions[(sv * 3) + 1], mesh.SkinPositions[(sv * 3) + 2]);
+                Vector3 sn = new(mesh.SkinNormals[sv * 3], mesh.SkinNormals[(sv * 3) + 1], mesh.SkinNormals[(sv * 3) + 2]);
 
                 float w0 = 0f, w1 = 0f, w2 = 0f, w3 = 0f;
                 int j0 = 0, j1 = 0, j2 = 0, j3 = 0;
@@ -878,21 +891,60 @@ public partial class MainViewModel : ObservableObject
             nrmOffset += mesh.VertexCount * 3;
         }
 
-        if (Viewport is not null)
+        Viewport?.SetAnimatedFrame(_animatedPositions, _animatedNormals);
+    }
+
+    /// <summary>
+    /// Transform for a rigid, unweighted mesh that the clip does not name in any
+    /// track — an alt costume's hat or ear in one of the borrowed body clips.
+    ///
+    /// <para>
+    /// Which answer is right depends on the space the mesh was authored in, and
+    /// the rest positions say which. A mesh whose bounds enclose the origin
+    /// (kk00/kk01, sister01's hat) is modelled in its own local space: only its
+    /// own track can place it, and multiplying it by some bone's matrix throws it
+    /// across the scene, so it stays where the static view draws it. A mesh that
+    /// already sits out at the skeleton (hat_kyon01 up at head height) shares the
+    /// bind-pose space and can ride the bone it is resting on.
+    /// </para>
+    /// </summary>
+    private static Matrix4x4 RigidFallback(RingModel model, RingMesh mesh, Matrix4x4[] final)
+    {
+        int count = mesh.SkinPositions.Length / 3;
+        if (count == 0 || model.Bones.Count == 0)
         {
-            Viewport.SetAnimatedFrame(_animatedPositions, _animatedNormals);
+            return Matrix4x4.Identity;
         }
 
-        float minDelta = float.MaxValue, maxDelta = float.MinValue;
-        int checkCount = Math.Min(_animatedPositions.Length, model.Meshes[0].Positions.Length);
-        for (int i = 0; i < checkCount; i++)
+        Vector3 min = new(float.MaxValue), max = new(float.MinValue), sum = Vector3.Zero;
+        for (int i = 0; i < count; i++)
         {
-            float delta = Math.Abs(_animatedPositions[i] - model.Meshes[0].Positions[i]);
-            minDelta = Math.Min(minDelta, delta);
-            maxDelta = Math.Max(maxDelta, delta);
+            Vector3 p = new(mesh.SkinPositions[i * 3], mesh.SkinPositions[(i * 3) + 1], mesh.SkinPositions[(i * 3) + 2]);
+            min = Vector3.Min(min, p);
+            max = Vector3.Max(max, p);
+            sum += p;
         }
-        Log($"  PosDelta min={minDelta:F4} max={maxDelta:F4}");
-        Log($"ComputeSkinnedFrame END");
+
+        if (min.X <= 0f && max.X >= 0f && min.Y <= 0f && max.Y >= 0f && min.Z <= 0f && max.Z >= 0f)
+        {
+            return Matrix4x4.Identity;
+        }
+
+        Vector3 centre = sum / count;
+        int best = -1;
+        float bestDistance = float.MaxValue;
+        for (int b = 0; b < model.Bones.Count; b++)
+        {
+            float[] bind = model.Bones[b].Bind;
+            float d = Vector3.DistanceSquared(centre, new Vector3(bind[12], bind[13], bind[14]));
+            if (d < bestDistance)
+            {
+                bestDistance = d;
+                best = b;
+            }
+        }
+
+        return best >= 0 ? final[best] : Matrix4x4.Identity;
     }
 
     private static int FindKeyframe(float[] times, float t)
@@ -904,6 +956,28 @@ public partial class MainViewModel : ObservableObject
         return 0;
     }
 
+    /// <summary>
+    /// Blends two keyframes. The stored matrices are pure rotation + translation,
+    /// so the rotation is slerped rather than blended element-wise: keys sit up to
+    /// 60 degrees apart in the fast clips, and a straight matrix lerp there
+    /// collapses the interpolated basis and visibly shrinks the limb mid-swing.
+    /// </summary>
+    private static Matrix4x4 BlendMatrix(Matrix4x4 a, Matrix4x4 b, float t)
+    {
+        if (t <= 0f) return a;
+        if (t >= 1f) return b;
+
+        if (!Matrix4x4.Decompose(a, out Vector3 sa, out Quaternion ra, out Vector3 ta) ||
+            !Matrix4x4.Decompose(b, out Vector3 sb, out Quaternion rb, out Vector3 tb))
+        {
+            return LerpMatrix(a, b, t);
+        }
+
+        return Matrix4x4.CreateScale(Vector3.Lerp(sa, sb, t))
+             * Matrix4x4.CreateFromQuaternion(Quaternion.Slerp(ra, rb, t))
+             * Matrix4x4.CreateTranslation(Vector3.Lerp(ta, tb, t));
+    }
+
     private static Matrix4x4 LerpMatrix(Matrix4x4 a, Matrix4x4 b, float t)
     {
         return new Matrix4x4(
@@ -913,7 +987,7 @@ public partial class MainViewModel : ObservableObject
             a.M41 + (b.M41 - a.M41) * t, a.M42 + (b.M42 - a.M42) * t, a.M43 + (b.M43 - a.M43) * t, a.M44 + (b.M44 - a.M44) * t);
     }
 
-    private static Matrix4x4 FloatsToMatrix(float[] m)
+    private static Matrix4x4 FloatsToMatrix(ReadOnlySpan<float> m)
     {
         return new Matrix4x4(
             m[0], m[1], m[2], m[3],
@@ -922,13 +996,18 @@ public partial class MainViewModel : ObservableObject
             m[12], m[13], m[14], m[15]);
     }
 
+    /// <summary>
+    /// Animation keys are world-space transforms in raw file coordinates, so they
+    /// need the same X/Z mirror the bind matrices got — and by the same
+    /// conjugation, or <c>inverseBind · animatedWorld</c> stops being a valid
+    /// composition and every bone lands somewhere wrong.
+    /// </summary>
     private static Matrix4x4 MirrorAnimMatrix(float[] m)
     {
-        return new Matrix4x4(
-            -m[0], -m[1], -m[2], m[3],
-            m[4], m[5], m[6], m[7],
-            -m[8], -m[9], -m[10], m[11],
-            -m[12], m[13], -m[14], m[15]);
+        Span<float> t = stackalloc float[16];
+        m.CopyTo(t);
+        AssetTypes.MirrorTransform(t);
+        return FloatsToMatrix(t);
     }
 
     [RelayCommand]
