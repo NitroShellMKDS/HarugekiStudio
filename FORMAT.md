@@ -8,8 +8,8 @@ and the coordinate system is left-handed with Y up and units of roughly 1 cm.
 The files store geometry in left-handed X/Y/Z with X and Z mirrored compared to
 standard Z-up Cartesian. On load, X and Z are negated (a conjugation by
 `diag(-1, 1, -1, 1)`) so consumers see standard right-handed coordinates: X
-right, Y forward, Z up. Bone bind and inverse-bind matrices receive the same
-conjugation so the skeleton stays consistent.
+right, Y forward, Z up. Bone bind matrices receive the same conjugation so the
+skeleton stays consistent.
 
 ## 1. Archive container (`data/*.bin`)
 
@@ -127,7 +127,7 @@ at +0x70 are `"Mate"` (the start of its first material name); otherwise it is a
 | 0x80 | u32 | index of the mesh node this bone skins |
 | 0x84 | u32 | weight count |
 | 0x88 | f32[16] | world bind matrix |
-| 0xC8 | f32[16] | inverse bind matrix |
+| 0xC8 | f32[16] | inverse bind matrix — see below; not worth reading |
 | 0x150 | {u32 vertex, f32 weight} × n | skin weights |
 
 The node size is exactly `0x150 + 8 * weight_count`, which holds for every bone
@@ -140,8 +140,10 @@ the root.
 
 Bones prefixed `DBS_`/`DBE_` are dynamic-bone chain start/end markers for hair,
 skirt, ribbons and collars. A few weightless `DBS_` anchors carry an unused
-second matrix that is *not* the inverse of their bind matrix; derive the inverse
-instead of trusting it.
+second matrix at 0xC8 that is *not* the inverse of their bind matrix. Because it
+cannot be trusted, the parser does not read it at all: both the viewport and the
+glTF exporter invert the bind matrix themselves, via
+`Transforms.InvertOrIdentity`.
 
 ### 3.2 Mesh node
 

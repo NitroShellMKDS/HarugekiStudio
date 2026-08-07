@@ -1,79 +1,90 @@
-   <Window xmlns="https://github.com/avaloniaui"
-           xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-           xmlns:vm="clr-namespace:HarugekiStudio.ViewModels"
-           xmlns:r="clr-namespace:HarugekiStudio.Rendering"
-           xmlns:views="clr-namespace:HarugekiStudio.Views"
-           x:Class="HarugekiStudio.Views.MainWindow"
-          x:Name="RootWindow"
-          x:DataType="vm:MainViewModel"
-          Title="Harugeki Studio" Width="1280" Height="760"
-          Background="#1E1E1E" FontSize="12"
-          Icon="/Assets/icon.png">
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:HarugekiStudio.ViewModels"
+        xmlns:r="clr-namespace:HarugekiStudio.Rendering"
+        xmlns:views="clr-namespace:HarugekiStudio.Views"
+        xmlns:fmt="clr-namespace:Harugeki.Formats;assembly=Harugeki.Formats"
+        x:Class="HarugekiStudio.Views.MainWindow"
+        x:Name="RootWindow"
+        x:DataType="vm:MainViewModel"
+        Title="Harugeki Studio" Width="1280" Height="760"
+        Background="{DynamicResource SurfaceWell}"
+        FontSize="{DynamicResource FontSizeBody}"
+        Icon="/Assets/icon.png">
 
   <DockPanel>
-    <!-- menu -->
+
+    <!-- ==================== menu ==================== -->
     <Menu DockPanel.Dock="Top">
       <MenuItem Header="_File">
-        <MenuItem Header="_Open Archive…" Command="{Binding OpenCommand}" InputGesture="Ctrl+O" />
-        <MenuItem Header="_Save Modified" Command="{Binding SaveCommand}" InputGesture="Ctrl+S" />
+        <MenuItem Header="_Open" Command="{Binding OpenCommand}" InputGesture="Ctrl+O" />
+        <MenuItem Header="_Save" Command="{Binding SaveCommand}" InputGesture="Ctrl+S" />
         <Separator />
-        <MenuItem Header="Close _All" Command="{Binding CloseAllCommand}" />
-        <MenuItem Header="E_xit" Command="{Binding ExitCommand}" />
-      </MenuItem>
-      <MenuItem Header="_View">
-        <MenuItem Header="_Reset Camera" Command="{Binding ResetViewCommand}" InputGesture="F" />
+        <MenuItem Header="_Close" Command="{Binding CloseAllCommand}" />
+        <MenuItem Header="E_xit" Command="{Binding ExitCommand}" InputGesture="Alt+F4" />
       </MenuItem>
     </Menu>
 
-    <!-- status bar -->
-    <Border DockPanel.Dock="Bottom" Background="#252526" BorderBrush="#333"
-            BorderThickness="0,1,0,0" Padding="8,3">
-      <TextBlock Text="{Binding Status}" Foreground="#BBB" />
+    <!-- ==================== status bar ==================== -->
+    <Border DockPanel.Dock="Bottom"
+            Background="{DynamicResource SurfaceRaised}"
+            BorderBrush="{DynamicResource Divider}"
+            BorderThickness="0,1,0,0"
+            Padding="{DynamicResource StatusPadding}">
+      <TextBlock Text="{Binding Status}" Foreground="{DynamicResource TextSecondary}" TextTrimming="CharacterEllipsis" />
     </Border>
 
     <!-- Outliner | viewport | Properties, with min widths so no pane can be
          dragged away to nothing. -->
     <Grid>
       <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="280" MinWidth="180" />
-        <ColumnDefinition Width="4" />
-        <ColumnDefinition Width="*" MinWidth="240" />
-        <ColumnDefinition Width="4" />
-        <ColumnDefinition Width="300" MinWidth="200" />
+        <ColumnDefinition Width="290" MinWidth="200" />
+        <ColumnDefinition Width="1" />
+        <ColumnDefinition Width="*" MinWidth="260" />
+        <ColumnDefinition Width="1" />
+        <ColumnDefinition Width="310" MinWidth="220" />
       </Grid.ColumnDefinitions>
 
-      <!-- ================= Outliner ================= -->
-      <Border Grid.Column="0" Background="#232323" BorderBrush="#333" BorderThickness="0,0,1,0">
+      <!-- ==================== Outliner ==================== -->
+      <Border Grid.Column="0" Classes="pane" BorderThickness="0">
         <DockPanel>
-          <TextBlock DockPanel.Dock="Top" Text="Outliner" Margin="8,6,8,4"
-                     FontWeight="SemiBold" Foreground="#DDD" />
+          <Border DockPanel.Dock="Top" Classes="toolbar" Padding="{DynamicResource PanePadding}">
+            <TextBlock Text="Outliner" Classes="paneHeader" />
+          </Border>
+
           <TextBox DockPanel.Dock="Top" Name="SearchBox"
                    Text="{Binding SearchFilter, Mode=TwoWay}"
-                   PlaceholderText="Search" Margin="6,0,6,6" Height="26" FontSize="12" />
+                   PlaceholderText="Search assets"
+                   Margin="8,8,8,4" />
+
           <TreeView ItemsSource="{Binding CurrentItems}"
                     SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
-                    Background="Transparent" BorderThickness="0">
+                    Background="Transparent" BorderThickness="0"
+                    Padding="4,0,4,8">
             <TreeView.Styles>
               <Style Selector="TreeViewItem" x:DataType="vm:TreeItemViewModel">
                 <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
                 <Setter Property="ContextMenu">
                   <ContextMenu DataContext="{Binding DataContext, ElementName=RootWindow}" x:DataType="vm:MainViewModel">
-                    <MenuItem Header="Extract Raw" Command="{Binding ExtractRawCommand}" IsVisible="{Binding IsExtractRawVisible}" />
-                    <MenuItem Header="Extract" Command="{Binding ExtractCommand}" IsVisible="{Binding IsExtractVisible}" />
-                    <MenuItem Header="Export" Command="{Binding ExportCommand}" IsVisible="{Binding IsExportVisible}" />
+                    <MenuItem Header="Extract Raw…" Command="{Binding ExtractRawCommand}" IsVisible="{Binding IsRawVisible}" />
+                    <MenuItem Header="Extract Audio…" Command="{Binding ExtractAudioCommand}" IsVisible="{Binding IsExtractVisible}" />
+                    <MenuItem Header="Export…" Command="{Binding ExportCommand}" IsVisible="{Binding IsExportVisible}" />
                     <Separator />
-                    <MenuItem Header="Replace Raw" Command="{Binding ReplaceRawCommand}" IsVisible="{Binding IsReplaceRawVisible}" />
-                    <MenuItem Header="Replace" Command="{Binding ReplaceTextureCommand}" IsVisible="{Binding IsReplaceVisible}" />
-                    <MenuItem Header="Replace" Command="{Binding ReplaceAudioCommand}" IsVisible="{Binding IsReplaceAudioVisible}" />
+                    <MenuItem Header="Replace Raw…" Command="{Binding ReplaceRawCommand}" IsVisible="{Binding IsRawVisible}" />
+                    <MenuItem Header="Replace Texture…" Command="{Binding ReplaceTextureCommand}" IsVisible="{Binding IsReplaceTextureVisible}" />
+                    <MenuItem Header="Replace Audio…" Command="{Binding ReplaceAudioCommand}" IsVisible="{Binding IsReplaceAudioVisible}" />
                   </ContextMenu>
                 </Setter>
               </Style>
             </TreeView.Styles>
+
             <TreeView.ItemTemplate>
               <TreeDataTemplate ItemsSource="{Binding Children}" x:DataType="vm:TreeItemViewModel">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                  <Border Width="8" Height="8" CornerRadius="2" VerticalAlignment="Center"
-                          Background="{Binding Colour}" />
+                <StackPanel Orientation="Horizontal" Spacing="{DynamicResource SpaceS}">
+                  <!-- Kind dot: hue identifies the asset type at a glance. -->
+                  <Border Width="7" Height="7" CornerRadius="4" VerticalAlignment="Center"
+                          Background="{Binding Kind, Converter={StaticResource AssetKindBrush}}" />
+
                   <ItemsControl ItemsSource="{Binding HeaderSegments}">
                     <ItemsControl.ItemsPanel>
                       <ItemsPanelTemplate>
@@ -81,15 +92,13 @@
                       </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
-                      <DataTemplate>
-                        <TextBlock Text="{Binding Text}" 
-                                   Foreground="{Binding IsHighlight, Converter={StaticResource HighlightBrushConverter}}"
-                                   FontWeight="{Binding IsHighlight, Converter={StaticResource HighlightWeightConverter}}" />
+                      <DataTemplate x:DataType="vm:TextSegment">
+                        <TextBlock Text="{Binding Text}" Classes.hit="{Binding IsHighlight}" />
                       </DataTemplate>
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
-                  <TextBlock Text="{Binding Detail}" Foreground="#777" FontSize="11"
-                             VerticalAlignment="Center" />
+
+                  <TextBlock Text="{Binding Detail}" Classes="meta" />
                 </StackPanel>
               </TreeDataTemplate>
             </TreeView.ItemTemplate>
@@ -97,34 +106,40 @@
         </DockPanel>
       </Border>
 
-      <GridSplitter Grid.Column="1" Background="#2D2D2D" ResizeDirection="Columns" />
+      <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
 
-      <!-- ================= centre ================= -->
-      <Grid Grid.Column="2">
+      <!-- ==================== centre ==================== -->
+      <Grid Grid.Column="2" Background="{DynamicResource SurfaceWell}">
         <Grid.RowDefinitions>
-          <RowDefinition Height="*" MinHeight="120" />
-          <RowDefinition Height="4" />
-          <RowDefinition Height="170" MinHeight="60" />
+          <RowDefinition Height="*" MinHeight="140" />
+          <RowDefinition Height="1" />
+          <RowDefinition Height="190" MinHeight="80" />
         </Grid.RowDefinitions>
 
         <TabControl Grid.Row="0" SelectedIndex="{Binding SelectedPane, Mode=TwoWay}"
-                    Background="#1A1A1A">
+                    Background="{DynamicResource SurfaceWell}">
+
+          <!-- viewport -->
           <TabItem Header="Viewport">
             <DockPanel>
-              <Border DockPanel.Dock="Top" Background="#2B2B2B" BorderBrush="#333"
-                      BorderThickness="0,0,0,1" Padding="6,4">
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                  <TextBlock Text="Shading:" Foreground="#AAA" VerticalAlignment="Center" />
+              <Border DockPanel.Dock="Top" Classes="toolbar">
+                <StackPanel Orientation="Horizontal" Spacing="{DynamicResource SpaceM}">
+                  <TextBlock Text="Shading" Classes="label" />
                   <ComboBox ItemsSource="{Binding ShadingModes}"
                             SelectedItem="{Binding Shading, Mode=TwoWay}"
-                            MinWidth="110" FontSize="12" />
-                  <Button Content="Reset Camera" Command="{Binding ResetViewCommand}" FontSize="12" />
+                            MinWidth="120" />
+                  <Button Content="Reset Camera" Command="{Binding ResetViewCommand}" />
+                  <TextBlock Classes="meta" Text="Drag to orbit · Shift-drag to pan · Wheel to zoom"
+                             Margin="8,0,0,0" />
                 </StackPanel>
               </Border>
+
               <Grid>
                 <r:GlViewport Name="Viewport"
                               Model="{Binding ViewportModel}"
                               Shading="{Binding Shading}" />
+                <!-- Transparent overlay so pointer input reaches us regardless of
+                     how the GL surface is composited. -->
                 <Canvas Background="Transparent"
                         PointerPressed="Overlay_OnPointerPressed"
                         PointerMoved="Overlay_OnPointerMoved"
@@ -133,117 +148,127 @@
               </Grid>
             </DockPanel>
           </TabItem>
+
+          <!-- texture -->
           <TabItem Header="Texture">
-            <DockPanel Background="#141414">
-              <Border DockPanel.Dock="Top" Background="#222" Padding="8,4">
-                <TextBlock Text="{Binding TextureStatus}" Foreground="#CCC" />
+            <DockPanel Background="{DynamicResource SurfaceWell}">
+              <Border DockPanel.Dock="Top" Classes="toolbar">
+                <TextBlock Text="{Binding TextureStatus}" Classes="label" />
               </Border>
-              <ScrollViewer HorizontalScrollBarVisibility="Auto"
-                            VerticalScrollBarVisibility="Auto">
-                <Image Source="{Binding TexturePreview}"
-                       Stretch="None" HorizontalAlignment="Center"
-                       VerticalAlignment="Center" Margin="12" />
+              <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                <Image Source="{Binding TexturePreview}" Stretch="None"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                       Margin="{DynamicResource ContentMargin}" />
               </ScrollViewer>
             </DockPanel>
           </TabItem>
+
+          <!-- audio -->
           <TabItem Header="Audio">
-            <DockPanel Background="#141414">
-              <Border DockPanel.Dock="Top" Background="#222" Padding="8,4">
-                <TextBlock Text="{Binding AudioStatus}" Foreground="#CCC" />
+            <DockPanel Background="{DynamicResource SurfaceWell}">
+              <Border DockPanel.Dock="Top" Classes="toolbar">
+                <TextBlock Text="{Binding AudioStatus}" Classes="label" />
               </Border>
-              <StackPanel Margin="12" Spacing="16">
-                <TextBlock Text="{Binding AudioTimeDisplay}" Foreground="#CCC"
-                           HorizontalAlignment="Center" FontSize="14" Margin="0,20,0,0" />
-                <Slider Minimum="0" Maximum="{Binding AudioTotalSeconds}"
-                        Value="{Binding AudioCurrentSeconds}"
+
+              <StackPanel Margin="24" Spacing="{DynamicResource SpaceL}" VerticalAlignment="Center">
+                <TextBlock Text="{Binding AudioTimeDisplay}"
+                           HorizontalAlignment="Center"
+                           FontFamily="{DynamicResource MonoFont}"
+                           FontSize="20"
+                           Foreground="{DynamicResource TextPrimary}" />
+
+                <!-- One-way from the view model, with scrubbing routed through a
+                     command. A two-way binding here fed the poll timer's position
+                     straight back in as a seek. -->
+                <Slider Name="AudioSeek" Minimum="0" Maximum="{Binding AudioTotalSeconds}"
+                        Value="{Binding AudioPositionSeconds, Mode=OneWay}"
                         IsEnabled="{Binding AudioIsLoaded}"
-                        Margin="0,8,0,0" />
-                <Button Content="Play" Command="{Binding PlayAudioCommand}"
-                        IsEnabled="{Binding AudioCanPlay}"
-                        HorizontalAlignment="Center" HorizontalContentAlignment="Center"
-                        MinWidth="80" Margin="0,0,0,8" />
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="10">
-                  <Button Content="Pause/Resume" Command="{Binding PauseResumeAudioCommand}"
-                          IsEnabled="{Binding AudioCanPauseOrResume}"
-                          HorizontalContentAlignment="Center" MinWidth="100" />
+                        PointerReleased="AudioSeek_OnPointerReleased" />
+
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                            Spacing="{DynamicResource SpaceM}">
+                  <Button Content="Play" Command="{Binding PlayAudioCommand}"
+                          IsEnabled="{Binding AudioCanPlay}" MinWidth="96" />
+                  <Button Content="Pause / Resume" Command="{Binding PauseResumeAudioCommand}"
+                          IsEnabled="{Binding AudioCanPauseOrResume}" MinWidth="120" />
                   <Button Content="Stop" Command="{Binding StopAudioCommand}"
-                          IsEnabled="{Binding AudioCanStop}"
-                          HorizontalContentAlignment="Center" MinWidth="80" />
+                          IsEnabled="{Binding AudioCanStop}" MinWidth="96" />
                 </StackPanel>
               </StackPanel>
             </DockPanel>
           </TabItem>
         </TabControl>
 
-        <GridSplitter Grid.Row="1" Background="#2D2D2D" ResizeDirection="Rows"
-                      HorizontalAlignment="Stretch" />
+        <GridSplitter Grid.Row="1" ResizeDirection="Rows" HorizontalAlignment="Stretch" />
 
-        <!-- bottom tabs: Console | Animation -->
-        <TabControl Grid.Row="2" Background="#1A1A1A">
+        <!-- console | animation -->
+        <TabControl Grid.Row="2" Background="{DynamicResource SurfaceWell}">
+
           <TabItem Header="Console">
-            <Border Background="#181818" BorderBrush="#333" BorderThickness="0,1,0,0">
-              <DockPanel>
-                <TextBlock DockPanel.Dock="Top" Text="Console" Margin="8,4"
-                           Foreground="#AAA" FontWeight="SemiBold" />
-                <ScrollViewer Name="ConsoleScroll">
-                  <SelectableTextBlock Text="{Binding ConsoleText}" Margin="8,0,8,8"
-                                       Foreground="#9CDCFE"
-                                       FontFamily="Consolas,monospace" FontSize="11" />
-                </ScrollViewer>
-              </DockPanel>
+            <Border Background="{DynamicResource SurfaceWell}">
+              <ScrollViewer Name="ConsoleScroll" Padding="{DynamicResource ToolbarPadding}">
+                <SelectableTextBlock Text="{Binding ConsoleText}"
+                                     Foreground="{DynamicResource TextSecondary}"
+                                     FontFamily="{DynamicResource MonoFont}"
+                                     FontSize="{DynamicResource FontSizeSmall}" />
+              </ScrollViewer>
             </Border>
           </TabItem>
+
           <TabItem Header="Animation">
-            <DockPanel Background="#1A1A1A">
-              <Border DockPanel.Dock="Top" Background="#2B2B2B" BorderBrush="#333"
-                      BorderThickness="0,0,0,1" Padding="6,4">
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                  <TextBlock Text="Animation:" Foreground="#AAA" VerticalAlignment="Center" />
-                  <ComboBox ItemsSource="{Binding AvailableAnimations}"
-                            SelectedItem="{Binding SelectedAnimation}"
-                            MinWidth="200" FontSize="12"
-                            IsEnabled="{Binding IsAnimationAvailable}">
+            <DockPanel Background="{DynamicResource SurfaceWell}">
+              <Border DockPanel.Dock="Top" Classes="toolbar">
+                <StackPanel Orientation="Horizontal" Spacing="{DynamicResource SpaceM}">
+                  <TextBlock Text="Clip" Classes="label" />
+                  <ComboBox ItemsSource="{Binding Animation.Clips}"
+                            SelectedItem="{Binding Animation.SelectedClip}"
+                            MinWidth="210"
+                            IsEnabled="{Binding Animation.CanSelect}">
                     <ComboBox.ItemTemplate>
-                      <DataTemplate>
+                      <DataTemplate x:DataType="fmt:RingAnimation">
                         <TextBlock Text="{Binding Name}" />
                       </DataTemplate>
                     </ComboBox.ItemTemplate>
                   </ComboBox>
-                  <Button Content="Play" Command="{Binding PlayAnimationCommand}"
-                          IsEnabled="{Binding IsAnimationAvailable}"
-                          FontSize="12" />
-                  <Button Content="Stop" Command="{Binding StopAnimationCommand}"
-                          IsEnabled="{Binding IsAnimationPlaying}"
-                          FontSize="12" />
-                  <TextBlock Text="{Binding AnimationTime, StringFormat={}{0:0.00}s}" Foreground="#CCC"
+                  <Button Content="Play" Command="{Binding Animation.PlayCommand}"
+                          IsEnabled="{Binding Animation.CanPlay}" />
+                  <Button Content="Stop" Command="{Binding Animation.StopCommand}"
+                          IsEnabled="{Binding Animation.IsPlaying}" />
+                  <TextBlock Text="{Binding Animation.Time, StringFormat={}{0:0.00}s}"
+                             FontFamily="{DynamicResource MonoFont}"
+                             Foreground="{DynamicResource TextPrimary}"
                              VerticalAlignment="Center" Margin="8,0,0,0" />
                 </StackPanel>
               </Border>
-              <views:DopeSheetView Animations="{Binding AvailableAnimations}"
-                         SelectedAnimation="{Binding SelectedAnimation}"
-                         CurrentTime="{Binding AnimationTime}"
-                         Duration="{Binding AnimationDuration}" />
+
+              <!-- Scrolls: a 49-bone skeleton is far taller than this pane. -->
+              <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <views:DopeSheetView SelectedAnimation="{Binding Animation.SelectedClip}"
+                                     CurrentTime="{Binding Animation.Time}"
+                                     Duration="{Binding Animation.Duration}" />
+              </ScrollViewer>
             </DockPanel>
           </TabItem>
         </TabControl>
       </Grid>
 
-      <GridSplitter Grid.Column="3" Background="#2D2D2D" ResizeDirection="Columns" />
+      <GridSplitter Grid.Column="3" ResizeDirection="Columns" />
 
-      <!-- ================= Properties ================= -->
-      <Border Grid.Column="4" Background="#232323" BorderBrush="#333" BorderThickness="1,0,0,0">
+      <!-- ==================== Properties ==================== -->
+      <Border Grid.Column="4" Classes="pane" BorderThickness="0">
         <DockPanel>
-          <TextBlock DockPanel.Dock="Top" Text="Properties" Margin="8,6"
-                     FontWeight="SemiBold" Foreground="#DDD" />
+          <Border DockPanel.Dock="Top" Classes="toolbar" Padding="{DynamicResource PanePadding}">
+            <TextBlock Text="Properties" Classes="paneHeader" />
+          </Border>
+
           <ScrollViewer>
-            <ItemsControl ItemsSource="{Binding Properties}" Margin="8,0,8,8">
+            <ItemsControl ItemsSource="{Binding Properties}" Margin="10,8">
               <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="vm:PropertyRow">
-                  <Grid ColumnDefinitions="120,*" Margin="0,2">
-                    <TextBlock Grid.Column="0" Text="{Binding Name}" Foreground="#8A8A8A"
-                               TextWrapping="Wrap" />
-                    <TextBlock Grid.Column="1" Text="{Binding Value}" Foreground="#E8E8E8"
-                               TextWrapping="Wrap" />
+                  <Grid ColumnDefinitions="120,*" Margin="0,3">
+                    <TextBlock Grid.Column="0" Text="{Binding Name}" Classes="label" TextWrapping="Wrap"
+                               VerticalAlignment="Top" />
+                    <TextBlock Grid.Column="1" Text="{Binding Value}" Classes="value" />
                   </Grid>
                 </DataTemplate>
               </ItemsControl.ItemTemplate>

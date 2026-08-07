@@ -1,320 +1,261 @@
 namespace HarugekiStudio.Audio;
 
+public enum PlaybackState
+{
+    Stopped,
+    Playing,
+    Paused,
+}
+
+/// <summary>
+/// Transport controls over <see cref="AudioPlaybackEngine"/>.
+///
+/// <para>
+/// One <see cref="State"/> replaces what used to be four independent booleans
+/// that every method had to keep mutually consistent by hand. The play position
+/// is read from the OpenAL source rather than estimated from a wall clock, which
+/// is what lets a seek actually land: the clock and the audio cannot disagree
+/// when there is only one of them.
+/// </para>
+/// </summary>
 public sealed class AudioPlaybackService : IDisposable
 {
-    private readonly AudioPlaybackEngine _engine;
-    private readonly object _sync = new();
+    /// <summary>How often the position is polled while playing. 25 ms is smooth at 60 Hz.</summary>
+    private static readonly TimeSpan s_pollInterval = TimeSpan.FromMilliseconds(25);
+
+    private readonly AudioPlaybackEngine _engine = new();
+    private readonly Lock _sync = new();
+
+    private Timer? _poll;
     private IAudioDecoder? _decoder;
     private bool _disposed;
-    private DateTime _playStartTime;
-    private double _playStartSeconds;
-    private System.Threading.Timer? _uiTimer;
+
+    /// <summary>Raised whenever the position or the state changes. Not marshalled
+    /// to any thread — the timer fires on the pool, so subscribers must post.</summary>
+    public event Action? StateChanged;
 
     public bool IsLoaded { get; private set; }
-    public bool CanPlay => IsLoaded && !CanPause && !CanResume;
-    public bool CanPause { get; private set; }
-    public bool CanResume { get; private set; }
-    public bool CanStop => IsLoaded && (CanPause || CanResume);
 
-    public TimeSpan CurrentTime
+    public PlaybackState State { get; private set; }
+
+    public TimeSpan Duration { get; private set; }
+
+    public TimeSpan Position
     {
         get
         {
-            if (_decoder == null || _decoder.SampleRate == 0 || _decoder.Channels == 0)
+            if (!IsLoaded)
             {
                 return TimeSpan.Zero;
             }
 
-            if (!CanPause)
-            {
-                return TimeSpan.FromSeconds(_playStartSeconds);
-            }
-
-            double elapsed = (DateTime.UtcNow - _playStartTime).TotalSeconds;
-            double current = _playStartSeconds + elapsed;
-            return TimeSpan.FromSeconds(Math.Max(0, Math.Min(current, TotalTime.TotalSeconds)));
+            // A source that has run to the end reports 0, which would snap the UI
+            // back to the start on the last tick; hold it at the end instead.
+            return State == PlaybackState.Stopped && _finishedAtEnd
+                ? Duration
+                : TimeSpan.FromSeconds(Math.Clamp(_engine.PositionSeconds, 0, Duration.TotalSeconds));
         }
     }
 
-    public TimeSpan TotalTime => _decoder == null || _decoder.SampleRate == 0 || _decoder.Channels == 0
-                ? TimeSpan.Zero
-                : TimeSpan.FromSeconds((double)_decoder.TotalSamples / (_decoder.SampleRate * _decoder.Channels));
+    private bool _finishedAtEnd;
 
-    public int SampleRate => _decoder?.SampleRate ?? 0;
-    public int Channels => _decoder?.Channels ?? 0;
-    public long SampleCount => _decoder?.TotalSamples ?? 0;
+    public bool CanPlay => IsLoaded && State != PlaybackState.Playing;
+    public bool CanPause => State == PlaybackState.Playing;
+    public bool CanResume => State == PlaybackState.Paused;
+    public bool CanStop => IsLoaded && State != PlaybackState.Stopped;
 
-    public event Action? StateChanged;
-
-    public AudioPlaybackService()
+    /// <summary>Decodes a clip and hands it to the device, replacing whatever was loaded.</summary>
+    public void Load(byte[] data)
     {
-        _engine = new AudioPlaybackEngine();
-    }
-
-    public void Load(byte[] data, string extension)
-    {
-        if (_disposed)
-        {
-            throw new ObjectDisposedException(nameof(AudioPlaybackService));
-        }
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(data);
 
         lock (_sync)
         {
-            ResetLocked();
-            _engine.Initialize();
+            Unload();
 
             try
             {
-                if (extension.Equals(".wav", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (!WavDecoder.TryParse(data, out AudioMetadata metadata))
-                    {
-                        throw new InvalidDataException("Invalid WAV data");
-                    }
+                _decoder = AudioInfoHelper.CreateDecoder(data);
+                _engine.Initialize();
 
-                    _decoder = new WavDecoder(data, metadata.DataOffset, metadata.DataLength, metadata.SampleRate, metadata.Channels, metadata.BitsPerSample);
-                }
-                else
-                {
-                    _decoder = extension.Equals(".ogg", StringComparison.OrdinalIgnoreCase)
-                        ? (IAudioDecoder)new OggVorbisDecoder(data)
-                        : throw new NotSupportedException($"Unsupported audio format: {extension}");
-                }
-
-                int totalBytes = _decoder.TotalBytes;
-                byte[] pcm = new byte[totalBytes];
+                byte[] pcm = new byte[_decoder.TotalBytes];
                 _decoder.ReadAll(pcm);
-
                 _engine.UploadPcm(pcm, _decoder.Channels, _decoder.BitsPerSample, _decoder.SampleRate);
 
-                IsLoaded = true;
-                _playStartSeconds = 0;
-                _playStartTime = default;
-                CanPause = false;
-                CanResume = false;
+                Duration = _decoder.SampleRate > 0 && _decoder.Channels > 0
+                    ? TimeSpan.FromSeconds(
+                        (double)_decoder.TotalSamples / (_decoder.SampleRate * _decoder.Channels))
+                    : TimeSpan.Zero;
 
-                StartUiTimerLocked();
-                StateChanged?.Invoke();
+                IsLoaded = true;
+                State = PlaybackState.Stopped;
+                _finishedAtEnd = false;
             }
             catch
             {
-                ResetLocked();
+                Unload();
                 throw;
             }
         }
+
+        StateChanged?.Invoke();
     }
 
+    /// <summary>Plays from the start, or resumes if paused.</summary>
     public void Play()
     {
-        if (!IsLoaded || CanPause || !_engine.IsInitialized)
+        Transition(() => CanPlay, () =>
         {
-            return;
-        }
-
-        lock (_sync)
-        {
-            if (!IsLoaded || CanPause || !_engine.IsInitialized)
+            if (State != PlaybackState.Paused)
             {
-                return;
+                _engine.PositionSeconds = 0;
             }
 
-            try
-            {
-                if (CanResume)
-                {
-                    _engine.Resume();
-                    CanResume = false;
-                    _playStartTime = DateTime.UtcNow;
-                }
-                else
-                {
-                    _decoder?.Seek(0);
-                    _playStartSeconds = 0;
-                    _engine.Play();
-                    _playStartTime = DateTime.UtcNow;
-                }
-
-                CanPause = true;
-                StartUiTimerLocked();
-                StateChanged?.Invoke();
-            }
-            catch { }
-        }
+            _finishedAtEnd = false;
+            _engine.Play();
+            State = PlaybackState.Playing;
+            StartPolling();
+        });
     }
 
     public void Pause()
     {
-        if (!CanPause || !_engine.IsInitialized)
+        Transition(() => CanPause, () =>
         {
-            return;
-        }
-
-        lock (_sync)
-        {
-            if (!CanPause || !_engine.IsInitialized)
-            {
-                return;
-            }
-
-            try
-            {
-                _engine.Pause();
-                _playStartSeconds = CurrentTime.TotalSeconds;
-                CanPause = false;
-                CanResume = true;
-                StopUiTimerLocked();
-                StateChanged?.Invoke();
-            }
-            catch { }
-        }
+            _engine.Pause();
+            State = PlaybackState.Paused;
+            StopPolling();
+        });
     }
 
     public void Resume()
     {
-        if (!CanResume || !_engine.IsInitialized)
+        Transition(() => CanResume, () =>
         {
-            return;
+            _engine.Play();
+            State = PlaybackState.Playing;
+            StartPolling();
+        });
+    }
+
+    /// <summary>Pauses if playing, resumes if paused. What the single UI button does.</summary>
+    public void TogglePause()
+    {
+        if (CanPause)
+        {
+            Pause();
         }
-
-        lock (_sync)
+        else if (CanResume)
         {
-            if (!CanResume || !_engine.IsInitialized)
-            {
-                return;
-            }
-
-            try
-            {
-                _engine.Resume();
-                CanResume = false;
-                CanPause = true;
-                _playStartTime = DateTime.UtcNow;
-                StartUiTimerLocked();
-                StateChanged?.Invoke();
-            }
-            catch { }
+            Resume();
         }
     }
 
     public void Stop()
     {
-        if (!IsLoaded || !_engine.IsInitialized)
+        Transition(() => CanStop, () =>
+        {
+            _engine.Stop();
+            State = PlaybackState.Stopped;
+            _finishedAtEnd = false;
+            StopPolling();
+        });
+    }
+
+    /// <summary>
+    /// Moves the play position. Unlike the previous implementation this actually
+    /// moves the audio: it sets the source's offset instead of only recording
+    /// where the UI should claim to be.
+    /// </summary>
+    public void SeekTo(TimeSpan position)
+    {
+        Transition(() => IsLoaded, () =>
+        {
+            _engine.PositionSeconds = Math.Clamp(position.TotalSeconds, 0, Duration.TotalSeconds);
+            _finishedAtEnd = false;
+
+            // Seeking a stopped source leaves it stopped but repositioned, so the
+            // next Play resumes from here rather than restarting.
+            if (State == PlaybackState.Stopped)
+            {
+                State = PlaybackState.Paused;
+            }
+        });
+    }
+
+    /// <summary>
+    /// The shared guard for every transport command: hold the lock, re-check the
+    /// precondition, run, notify. Exceptions propagate — swallowing them here is
+    /// what let a seek that did nothing look like a seek that worked.
+    /// </summary>
+    private void Transition(Func<bool> canRun, Action body)
+    {
+        if (_disposed)
         {
             return;
         }
 
         lock (_sync)
         {
-            if (!IsLoaded || !_engine.IsInitialized)
+            if (!IsLoaded || !_engine.IsInitialized || !canRun())
             {
                 return;
             }
 
-            try
+            body();
+        }
+
+        StateChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// Polls the source so the UI sees the position advance, and notices when the
+    /// clip runs out — OpenAL has no completion callback.
+    /// </summary>
+    private void StartPolling()
+    {
+        StopPolling();
+        _poll = new Timer(_ => Tick(), null, s_pollInterval, s_pollInterval);
+    }
+
+    private void StopPolling()
+    {
+        _poll?.Dispose();
+        _poll = null;
+    }
+
+    private void Tick()
+    {
+        lock (_sync)
+        {
+            if (_disposed || State != PlaybackState.Playing)
+            {
+                return;
+            }
+
+            if (!_engine.IsPlaying)
             {
                 _engine.Stop();
-                _engine.RequeueBuffer();
-                _decoder?.Seek(0);
-                _playStartSeconds = 0;
-                _playStartTime = default;
-
-                CanPause = false;
-                CanResume = false;
-                StopUiTimerLocked();
-                StateChanged?.Invoke();
+                State = PlaybackState.Stopped;
+                _finishedAtEnd = true;
+                StopPolling();
             }
-            catch { }
-        }
-    }
-
-    public void Seek(TimeSpan position)
-    {
-        if (!IsLoaded || !_engine.IsInitialized)
-        {
-            return;
         }
 
-        lock (_sync)
-        {
-            if (!IsLoaded || !_engine.IsInitialized)
-            {
-                return;
-            }
-
-            try
-            {
-                bool wasPlaying = CanPause;
-                if (wasPlaying)
-                {
-                    _engine.Stop();
-                    CanPause = false;
-                }
-
-                _playStartSeconds = position.TotalSeconds;
-                _engine.RequeueBuffer();
-
-                if (wasPlaying)
-                {
-                    _engine.Play();
-                    CanPause = true;
-                    _playStartTime = DateTime.UtcNow;
-                    StartUiTimerLocked();
-                }
-
-                StateChanged?.Invoke();
-            }
-            catch { }
-        }
+        StateChanged?.Invoke();
     }
 
-    private void StartUiTimerLocked()
+    private void Unload()
     {
-        StopUiTimerLocked();
-        _uiTimer = new System.Threading.Timer(_ =>
-        {
-            lock (_sync)
-            {
-                if (!CanPause)
-                {
-                    return;
-                }
-
-                if (!_engine.IsPlaying)
-                {
-                    CanPause = false;
-                    _playStartSeconds = TotalTime.TotalSeconds;
-                    StopUiTimerLocked();
-                    _decoder?.Seek(0);
-                    _engine.Stop();
-                    _engine.RequeueBuffer();
-                    StateChanged?.Invoke();
-                }
-                else
-                {
-                    Avalonia.Threading.Dispatcher.UIThread.Post(() => StateChanged?.Invoke());
-                }
-            }
-        }, null, 25, 25);
-    }
-
-    private void StopUiTimerLocked()
-    {
-        _uiTimer?.Dispose();
-        _uiTimer = null;
-    }
-
-    private void ResetLocked()
-    {
-        StopUiTimerLocked();
+        StopPolling();
         _engine.Reset();
         _decoder?.Dispose();
         _decoder = null;
-
         IsLoaded = false;
-        CanPause = false;
-        CanResume = false;
-        _playStartSeconds = 0;
-        _playStartTime = default;
+        State = PlaybackState.Stopped;
+        Duration = TimeSpan.Zero;
+        _finishedAtEnd = false;
     }
 
     public void Dispose()
@@ -324,18 +265,12 @@ public sealed class AudioPlaybackService : IDisposable
             return;
         }
 
+        _disposed = true;
+
         lock (_sync)
         {
-            StopUiTimerLocked();
-            ResetLocked();
+            Unload();
             _engine.Dispose();
-            _disposed = true;
         }
-        GC.SuppressFinalize(this);
-    }
-
-    ~AudioPlaybackService()
-    {
-        try { Dispose(); } catch { }
     }
 }

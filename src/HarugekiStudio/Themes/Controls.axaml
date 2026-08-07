@@ -1,0 +1,116 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!--
+    Layout and typography conventions only.
+
+    Every control's colours, hover states, focus rings and selection highlights
+    are left to the Fluent theme. That is deliberate: Fluent already derives them
+    from the OS light/dark setting and the user's accent colour, and any override
+    here would be a fixed value that stops following the platform — which is what
+    this file used to be full of.
+
+    The classes below name recurring roles in the layout so a pane header or a
+    metadata line is defined once rather than restyled at each use site.
+  -->
+
+  <!-- ==================== density ==================== -->
+  <!-- The app is a data browser; Fluent's default control heights are generous
+       for a tree with thousands of rows. -->
+  <Style Selector="TabItem">
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeBody}" />
+    <Setter Property="Padding" Value="12,5" />
+    <Setter Property="MinHeight" Value="30" />
+  </Style>
+
+  <Style Selector="TreeViewItem">
+    <Setter Property="MinHeight" Value="{DynamicResource RowHeight}" />
+  </Style>
+
+  <Style Selector="MenuItem">
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeBody}" />
+  </Style>
+
+  <Style Selector="Button">
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeBody}" />
+    <Setter Property="MinHeight" Value="{DynamicResource ControlHeight}" />
+    <Setter Property="Padding" Value="12,3" />
+    <Setter Property="CornerRadius" Value="{DynamicResource RadiusSmall}" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="ComboBox">
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeBody}" />
+    <Setter Property="MinHeight" Value="{DynamicResource ControlHeight}" />
+    <Setter Property="Padding" Value="10,3" />
+    <Setter Property="CornerRadius" Value="{DynamicResource RadiusSmall}" />
+  </Style>
+
+  <Style Selector="ComboBoxItem">
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeBody}" />
+    <Setter Property="MinHeight" Value="{DynamicResource RowHeight}" />
+  </Style>
+
+  <Style Selector="TextBox">
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeBody}" />
+    <Setter Property="MinHeight" Value="{DynamicResource ControlHeight}" />
+    <Setter Property="Padding" Value="8,3" />
+    <Setter Property="CornerRadius" Value="{DynamicResource RadiusSmall}" />
+  </Style>
+
+  <!-- ==================== text roles ==================== -->
+  <!-- Three weights from the softened text ramp in Palette.axaml: headings,
+       body text, de-emphasised metadata. Deliberately not Fluent's
+       SystemBaseHigh, which is pure black on light and pure white on dark. -->
+  <Style Selector="TextBlock.paneHeader">
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeHeading}" />
+    <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="TextBlock.label">
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeBody}" />
+    <Setter Property="Foreground" Value="{DynamicResource TextMuted}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="TextBlock.value">
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeBody}" />
+    <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+    <Setter Property="TextWrapping" Value="Wrap" />
+  </Style>
+
+  <Style Selector="TextBlock.meta">
+    <Setter Property="FontSize" Value="{DynamicResource FontSizeSmall}" />
+    <Setter Property="Foreground" Value="{DynamicResource TextMuted}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <!--
+    A matched run inside an Outliner row. Driven by `Classes.hit` on the TextBlock
+    rather than a value converter, so the colour re-resolves by itself when the
+    theme variant changes — a converter would hand back a brush captured at the
+    moment the row was built and then keep it forever.
+  -->
+  <Style Selector="TextBlock.hit">
+    <Setter Property="Foreground" Value="{DynamicResource SearchHit}" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <!-- ==================== surfaces ==================== -->
+  <!-- Two elevations from the surface ramp: panels sit back, toolbars and
+       headers sit forward. The ramp inverts between light and dark, which is
+       what makes the relationship read the same way in both. -->
+  <Style Selector="Border.pane">
+    <Setter Property="Background" Value="{DynamicResource SurfacePanel}" />
+  </Style>
+
+  <Style Selector="Border.toolbar">
+    <Setter Property="Background" Value="{DynamicResource SurfaceRaised}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Divider}" />
+    <Setter Property="BorderThickness" Value="0,0,0,1" />
+    <Setter Property="Padding" Value="{DynamicResource ToolbarPadding}" />
+  </Style>
+
+</Styles>

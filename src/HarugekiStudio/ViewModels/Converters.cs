@@ -1,36 +1,69 @@
+using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Data.Converters;
 using Avalonia.Media;
+using Avalonia.Styling;
 using System.Globalization;
 
 namespace HarugekiStudio.ViewModels;
 
-public sealed class HighlightBrushConverter : IValueConverter
+/// <summary>Resolves a brush from the application's resources by key.</summary>
+internal static class PaletteLookup
 {
-    public IBrush? TrueBrush { get; set; } = new SolidColorBrush(Color.Parse("#FFD700"));
-    public IBrush? FalseBrush { get; set; } = new SolidColorBrush(Color.Parse("#EEEEEE"));
-
-    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    /// <summary>
+    /// Looks <paramref name="key"/> up against the live theme variant, falling
+    /// back to a visible grey rather than throwing if it is missing.
+    /// </summary>
+    public static IBrush Brush(string key)
     {
-        return value is bool b && b ? TrueBrush : FalseBrush;
-    }
+        Application? app = Application.Current;
+        if (app is null)
+        {
+            return Brushes.Gray;
+        }
 
-    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
-    {
-        throw new NotSupportedException();
+        ThemeVariant variant = app.ActualThemeVariant;
+        return app.TryFindResource(key, variant, out object? found) && found is IBrush brush
+            ? brush
+            : Brushes.Gray;
     }
 }
 
-public sealed class HighlightWeightConverter : IValueConverter
+/// <summary>
+/// Maps an Outliner row's asset kind to its colour dot.
+///
+/// <para>
+/// Safe to resolve once per row despite the theme being changeable at runtime:
+/// the asset-kind colours in <c>Themes/Palette.axaml</c> are deliberately
+/// variant-independent, because a categorical colour has to mean the same thing
+/// in light and dark. Anything that *does* vary by theme is bound with
+/// <c>DynamicResource</c> or a style class instead of coming through here.
+/// </para>
+/// </summary>
+public sealed class AssetKindBrushConverter : IValueConverter
 {
-    public FontWeight TrueWeight { get; set; } = FontWeight.Bold;
-    public FontWeight FalseWeight { get; set; } = FontWeight.Normal;
-
-    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    private static readonly Dictionary<string, string> s_keys = new(StringComparer.Ordinal)
     {
-        return value is bool b && b ? TrueWeight : FalseWeight;
+        ["Model"] = "AssetModelBrush",
+        ["Texture"] = "AssetTextureBrush",
+        ["Animation"] = "AssetAnimationBrush",
+        ["Audio"] = "AssetAudioBrush",
+        ["Mesh"] = "AssetMeshBrush",
+        ["Material"] = "AssetMaterialBrush",
+        ["Bone"] = "AssetBoneBrush",
+        ["Container"] = "AssetContainerBrush",
+    };
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        string key = value is string kind && s_keys.TryGetValue(kind, out string? found)
+            ? found
+            : "AssetUnknownBrush";
+
+        return PaletteLookup.Brush(key);
     }
 
-    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
         throw new NotSupportedException();
     }

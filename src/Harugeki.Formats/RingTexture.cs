@@ -1,3 +1,4 @@
+using Harugeki.Formats.Binary;
 using System.Buffers.Binary;
 using System.Text;
 
@@ -48,8 +49,8 @@ public sealed class RingTexture
             throw new ArgumentException("not a ringtex2 blob");
         }
 
-        int w = (int)AssetTypes.U32(blob, 0x2C);
-        int h = (int)AssetTypes.U32(blob, 0x30);
+        int w = (int)BinaryRead.U32(blob, 0x2C);
+        int h = (int)BinaryRead.U32(blob, 0x30);
 
         if (w <= 0 || w > MaxDimension || h <= 0 || h > MaxDimension)
         {
@@ -71,7 +72,7 @@ public sealed class RingTexture
                 $"Texture blob {blob.Length} bytes too small for {w}x{h} RGBA8 data ({HeaderSize + need} bytes needed)")
             : new RingTexture
             {
-                Name = AssetTypes.ReadName(blob, 0x10, 16),
+                Name = BinaryRead.Name(blob, 0x10, 16),
                 Width = w,
                 Height = h,
                 Pixels = blob.Slice(HeaderSize, (int)need).ToArray(),
@@ -101,32 +102,35 @@ public sealed class RingTexture
         return result;
     }
 
-    /// <summary>Pixels as BGRA8, the layout Avalonia's bitmaps want.</summary>
-    public byte[] ToBgra()
+    /// <summary>
+    /// Swaps the red and blue channels of a 32-bit image, converting RGBA to BGRA
+    /// or back again.
+    ///
+    /// <para>
+    /// One method covers both directions because the swizzle is an involution:
+    /// applying it twice returns the original. The stored pixels are RGBA8 and
+    /// Avalonia's universally supported layout is Bgra8888, so this sits on the
+    /// boundary between the two in both directions.
+    /// </para>
+    /// </summary>
+    public static byte[] SwapRedBlue(ReadOnlySpan<byte> pixels)
     {
-        byte[] dst = new byte[Pixels.Length];
-        for (int i = 0; i < Pixels.Length; i += 4)
+        byte[] dst = new byte[pixels.Length];
+        for (int i = 0; i + 3 < pixels.Length; i += 4)
         {
-            dst[i + 0] = Pixels[i + 2];
-            dst[i + 1] = Pixels[i + 1];
-            dst[i + 2] = Pixels[i + 0];
-            dst[i + 3] = Pixels[i + 3];
+            dst[i + 0] = pixels[i + 2];
+            dst[i + 1] = pixels[i + 1];
+            dst[i + 2] = pixels[i + 0];
+            dst[i + 3] = pixels[i + 3];
         }
+
         return dst;
     }
 
-    /// <summary>Inverse of <see cref="ToBgra"/>, for importing edited images.</summary>
-    public static byte[] FromBgra(ReadOnlySpan<byte> bgra)
+    /// <summary>This texture's pixels as BGRA8, the layout Avalonia's bitmaps want.</summary>
+    public byte[] ToBgra()
     {
-        byte[] dst = new byte[bgra.Length];
-        for (int i = 0; i < bgra.Length; i += 4)
-        {
-            dst[i + 0] = bgra[i + 2];
-            dst[i + 1] = bgra[i + 1];
-            dst[i + 2] = bgra[i + 0];
-            dst[i + 3] = bgra[i + 3];
-        }
-        return dst;
+        return SwapRedBlue(Pixels);
     }
 
     public override string ToString()

@@ -154,4 +154,21 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
+    /// <summary>
+    /// Commits a scrub when the user lets go of the transport slider.
+    ///
+    /// <para>
+    /// Seeking on release rather than on every value change is what keeps the
+    /// slider from fighting the playback clock: the slider's value is driven
+    /// one-way from the view model while playing, and only a real pointer
+    /// interaction turns into a seek.
+    /// </para>
+    /// </summary>
+    private void AudioSeek_OnPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (sender is Slider slider && DataContext is MainViewModel vm)
+        {
+            vm.SeekAudioCommand.Execute(slider.Value);
+        }
+    }
 }

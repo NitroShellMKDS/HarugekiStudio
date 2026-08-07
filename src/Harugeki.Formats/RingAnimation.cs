@@ -1,3 +1,5 @@
+using Harugeki.Formats.Binary;
+
 namespace Harugeki.Formats;
 
 /// <summary>
@@ -43,8 +45,8 @@ public sealed class RingAnimation
             return false;
         }
 
-        uint n = AssetTypes.U32(blob, 0);
-        uint frames = AssetTypes.U32(blob, 4);
+        uint n = BinaryRead.U32(blob, 0);
+        uint frames = BinaryRead.U32(blob, 4);
         if (n == 0 || n >= 4096 || frames == 0 || frames >= 100000)
         {
             return false;
@@ -61,7 +63,7 @@ public sealed class RingAnimation
             return false;
         }
 
-        if (AssetTypes.U32(blob, 8) != need)
+        if (BinaryRead.U32(blob, 8) != need)
         {
             return false;
         }
@@ -72,7 +74,7 @@ public sealed class RingAnimation
             return false;
         }
 
-        uint keys = AssetTypes.U32(blob, first + 0x20);
+        uint keys = BinaryRead.U32(blob, first + 0x20);
         return keys > 0 && keys < 100000 &&
                first + TrackHeader + ((long)keys * KeyStride) <= blob.Length;
     }
@@ -84,13 +86,13 @@ public sealed class RingAnimation
             throw new ArgumentException("not an animation blob");
         }
 
-        int n = (int)AssetTypes.U32(blob, 0);
-        RingAnimation anim = new() { Name = name, Frames = (int)AssetTypes.U32(blob, 4) };
+        int n = (int)BinaryRead.U32(blob, 0);
+        RingAnimation anim = new() { Name = name, Frames = (int)BinaryRead.U32(blob, 4) };
 
         for (int i = 0; i < n; i++)
         {
-            int o = (int)AssetTypes.U32(blob, 8 + (i * 4));
-            int count = (int)AssetTypes.U32(blob, o + 0x20);
+            int o = (int)BinaryRead.U32(blob, 8 + (i * 4));
+            int count = (int)BinaryRead.U32(blob, o + 0x20);
             if (o + TrackHeader + ((long)count * KeyStride) > blob.Length)
             {
                 throw new ArgumentException("animation track overruns the blob");
@@ -104,15 +106,15 @@ public sealed class RingAnimation
                 float[] m = new float[16];
                 for (int j = 0; j < 16; j++)
                 {
-                    m[j] = AssetTypes.F32(blob, at + (j * 4));
+                    m[j] = BinaryRead.F32(blob, at + (j * 4));
                 }
 
                 mats[k] = m;
-                times[k] = AssetTypes.F32(blob, at + 0x40);
+                times[k] = BinaryRead.F32(blob, at + 0x40);
             }
             anim.Tracks.Add(new Track
             {
-                Name = AssetTypes.ReadName(blob, o, 0x20),
+                Name = BinaryRead.Name(blob, o, 0x20),
                 Times = times,
                 Matrices = mats,
             });

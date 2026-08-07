@@ -1,46 +1,42 @@
+using Harugeki.Formats;
 using NVorbis;
 using System.Buffers.Binary;
+using System.Runtime.InteropServices;
 
 namespace HarugekiStudio.Audio;
 
+/// <summary>
+/// Ogg Vorbis, decoded to 16-bit PCM in full at construction. See
+/// <see cref="IAudioDecoder"/> for why nothing here streams.
+/// </summary>
 public sealed class OggVorbisDecoder : IAudioDecoder
 {
-    private readonly VorbisReader _reader;
+    private const int ChunkSamples = 65536;
+    private const int PageHeaderSize = 27;
+    private const int MinPageSize = PageHeaderSize;
+
     private readonly short[] _pcm;
-    private long _position;
-
-    public int SampleRate { get; }
-    public int Channels { get; }
-    public int BitsPerSample => 16;
-    public long TotalSamples { get; }
-    public int TotalBytes { get; }
-
-    public long Position
-    {
-        get => _position;
-        set => _position = value < 0 ? 0 : value > TotalSamples ? TotalSamples : value;
-    }
 
     public OggVorbisDecoder(byte[] data)
     {
-        MemoryStream stream = new(data);
-        _reader = new VorbisReader(stream, true);
+        ArgumentNullException.ThrowIfNull(data);
 
-        SampleRate = _reader.SampleRate;
-        Channels = _reader.Channels;
-        TotalSamples = _reader.TotalSamples * Channels;
-        TotalBytes = checked((int)(TotalSamples * 2));
+        using MemoryStream stream = new(data);
+        using VorbisReader reader = new(stream, true);
 
-        _pcm = new short[TotalSamples];
+        SampleRate = reader.SampleRate;
+        Channels = reader.Channels;
 
-        const int ChunkSamples = 65536;
-        float[] floatBuffer = new float[ChunkSamples];
+        long expected = reader.TotalSamples * Channels;
+        _pcm = new short[expected];
+
+        float[] buffer = new float[ChunkSamples];
         int written = 0;
 
-        while (written < TotalSamples)
+        while (written < expected)
         {
-            int toRead = (int)Math.Min(ChunkSamples, TotalSamples - written);
-            int read = _reader.ReadSamples(floatBuffer, 0, toRead);
+            int toRead = (int)Math.Min(ChunkSamples, expected - written);
+            int read = reader.ReadSamples(buffer, 0, toRead);
             if (read <= 0)
             {
                 break;
@@ -48,131 +44,89 @@ public sealed class OggVorbisDecoder : IAudioDecoder
 
             for (int i = 0; i < read; i++)
             {
-                float sample = floatBuffer[i];
-                if (sample > 1.0f)
-                {
-                    sample = 1.0f;
-                }
-                else if (sample < -1.0f)
-                {
-                    sample = -1.0f;
-                }
-
-                _pcm[written + i] = (short)(sample * short.MaxValue);
+                _pcm[written + i] = (short)(Math.Clamp(buffer[i], -1f, 1f) * short.MaxValue);
             }
 
             written += read;
         }
 
-        if (written < TotalSamples)
+        // A truncated or damaged stream decodes short; trust what came out.
+        if (written < expected)
         {
             Array.Resize(ref _pcm, written);
-            TotalSamples = written;
-            TotalBytes = written * 2;
-        }
-    }
-
-    public int Read(short[] buffer, int sampleCount)
-    {
-        int toRead = (int)Math.Min(sampleCount, TotalSamples - _position);
-        if (toRead <= 0)
-        {
-            return 0;
         }
 
-        Array.Copy(_pcm, _position, buffer, 0, toRead);
-        _position += toRead;
-        return toRead;
+        TotalSamples = _pcm.Length;
+        TotalBytes = _pcm.Length * sizeof(short);
     }
 
-    public int Read(byte[] buffer, int sampleCount)
+    public int SampleRate { get; }
+    public int Channels { get; }
+    public int BitsPerSample => 16;
+    public long TotalSamples { get; }
+    public int TotalBytes { get; }
+
+    public void ReadAll(Span<byte> destination)
     {
-        int toRead = (int)Math.Min(sampleCount, TotalSamples - _position);
-        if (toRead <= 0)
-        {
-            return 0;
-        }
-
-        int bytesToCopy = toRead * 2;
-        Buffer.BlockCopy(_pcm, (int)(_position * 2), buffer, 0, bytesToCopy);
-        _position += toRead;
-        return toRead;
+        MemoryMarshal.AsBytes(_pcm.AsSpan()).CopyTo(destination);
     }
 
-    public void ReadAll(byte[] destination)
-    {
-        Buffer.BlockCopy(_pcm, 0, destination, 0, TotalBytes);
-    }
-
-    public void Seek(long samplePosition)
-    {
-        _position = samplePosition < 0 ? 0 : samplePosition > TotalSamples ? TotalSamples : samplePosition;
-    }
-
-    public void Dispose()
-    {
-        _reader.Dispose();
-    }
-
+    /// <summary>
+    /// Reads sample rate, channel count and length without decoding, by walking
+    /// the Ogg page headers: the identification header gives the format and the
+    /// final page's granule position gives the length.
+    /// </summary>
     public static bool TryParse(ReadOnlySpan<byte> data, out AudioMetadata metadata)
     {
         metadata = default;
 
-        int pos = 0;
+        if (!AssetTypes.IsOgg(data))
+        {
+            return false;
+        }
+
         bool foundIdHeader = false;
-        ulong totalSamplesPerChannel = 0;
+        ulong samplesPerChannel = 0;
         int sampleRate = 0;
         int channels = 0;
 
-        while (pos <= data.Length - 27)
+        for (int pos = 0; pos <= data.Length - MinPageSize;)
         {
-            if (data[pos] != 'O' || data[pos + 1] != 'g' || data[pos + 2] != 'g' || data[pos + 3] != 'S')
+            if (!AssetTypes.IsOgg(data[pos..]))
             {
-                pos++;
-                continue;
+                break;
             }
 
             byte headerType = data[pos + 5];
             ulong granulePos = BinaryPrimitives.ReadUInt64LittleEndian(data[(pos + 6)..]);
-            int numSegments = data[pos + 26];
-            int segTableStart = pos + 27;
-            int packetDataStart = segTableStart + numSegments;
+            int segmentCount = data[pos + 26];
+            int segmentTable = pos + PageHeaderSize;
+            int packet = segmentTable + segmentCount;
 
-            if (packetDataStart > data.Length)
+            if (packet > data.Length)
             {
                 break;
             }
 
             if (!foundIdHeader && granulePos == 0 && (headerType & 0x02) != 0)
             {
-                if (packetDataStart + 30 <= data.Length)
-                {
-                    if (data[packetDataStart] == 0x01 &&
-                        data[packetDataStart + 1] == 'v' &&
-                        data[packetDataStart + 2] == 'o' &&
-                        data[packetDataStart + 3] == 'r' &&
-                        data[packetDataStart + 4] == 'b' &&
-                        data[packetDataStart + 5] == 'i' &&
-                        data[packetDataStart + 6] == 's')
-                    {
-                        channels = data[packetDataStart + 11];
-                        sampleRate = BinaryPrimitives.ReadInt32LittleEndian(data[(packetDataStart + 12)..]);
-                        foundIdHeader = true;
-                    }
-                }
+                foundIdHeader = TryReadIdHeader(data, packet, out channels, out sampleRate);
             }
 
+            // 0x04 marks the last page of the stream; its granule position is the
+            // total sample count per channel.
             if ((headerType & 0x04) != 0)
             {
-                totalSamplesPerChannel = granulePos;
+                samplesPerChannel = granulePos;
             }
 
-            int pageDataSize = 0;
-            for (int i = 0; i < numSegments; i++)
+            int pageBytes = 0;
+            for (int i = 0; i < segmentCount; i++)
             {
-                pageDataSize += data[segTableStart + i];
+                pageBytes += data[segmentTable + i];
             }
-            pos += 27 + numSegments + pageDataSize;
+
+            pos += PageHeaderSize + segmentCount + pageBytes;
         }
 
         if (!foundIdHeader || sampleRate == 0 || channels == 0)
@@ -180,15 +134,35 @@ public sealed class OggVorbisDecoder : IAudioDecoder
             return false;
         }
 
-        long totalInterleavedSamples = (long)totalSamplesPerChannel * channels;
-        if (totalInterleavedSamples > (int.MaxValue / 2))
+        long interleaved = (long)samplesPerChannel * channels;
+        if (interleaved > int.MaxValue / 2)
         {
             return false;
         }
 
-        int dataLength = checked((int)(totalInterleavedSamples * 2));
-
-        metadata = new AudioMetadata(sampleRate, channels, 16, totalInterleavedSamples, 0, dataLength);
+        metadata = new AudioMetadata(sampleRate, channels, 16, interleaved, 0, (int)(interleaved * 2));
         return true;
+    }
+
+    private static bool TryReadIdHeader(ReadOnlySpan<byte> data, int at, out int channels, out int sampleRate)
+    {
+        channels = 0;
+        sampleRate = 0;
+
+        ReadOnlySpan<byte> signature = [0x01, .. "vorbis"u8];
+        if (at + 30 > data.Length || !data.Slice(at, signature.Length).SequenceEqual(signature))
+        {
+            return false;
+        }
+
+        channels = data[at + 11];
+        sampleRate = BinaryPrimitives.ReadInt32LittleEndian(data[(at + 12)..]);
+        return true;
+    }
+
+    public void Dispose()
+    {
+        // The VorbisReader is disposed once decoding finishes in the constructor;
+        // all that survives is the PCM array.
     }
 }

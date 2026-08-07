@@ -1,6 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using Harugeki.Formats;
-using System.Collections.ObjectModel;
 
 namespace HarugekiStudio.ViewModels;
 
@@ -10,8 +9,8 @@ namespace HarugekiStudio.ViewModels;
 /// </summary>
 public partial class TreeItemViewModel : ObservableObject
 {
-    [ObservableProperty] private bool _isExpanded;
-    [ObservableProperty] private bool _isSelected;
+    [ObservableProperty]
+    public partial bool IsExpanded { get; set; }
 
     private volatile bool _loaded;
     public object LoadLock { get; } = new();
@@ -52,11 +51,10 @@ public partial class TreeItemViewModel : ObservableObject
         }
     }
 
-    public bool HasChildren => Loader is not null || Children.Count > 0;
-
     partial void OnIsExpandedChanged(bool value)
     {
-        if (value) EnsureLoaded();
+        if (value)
+            EnsureLoaded();
     }
 
     public void EnsureLoaded()
@@ -92,19 +90,6 @@ public partial class TreeItemViewModel : ObservableObject
             }
         }
     }
-
-    public string Colour => Kind switch
-    {
-        "Model" => "#7FD4FF",
-        "Texture" => "#FFD479",
-        "Animation" => "#C7A0FF",
-        "Audio" => "#7FE3A8",
-        "Mesh" => "#8FE388",
-        "Material" => "#FF9EC4",
-        "Bone" => "#B0B0B0",
-        "Container" => "#DDDDDD",
-        _ => "#909090",
-    };
 
     public void UpdateSearchHighlight(string? searchText)
     {

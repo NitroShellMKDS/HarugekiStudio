@@ -1,24 +1,26 @@
-  <Application xmlns="https://github.com/avaloniaui"
-               xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-               xmlns:vm="clr-namespace:HarugekiStudio.ViewModels"
-               x:Class="HarugekiStudio.App"
-               RequestedThemeVariant="Dark">
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:HarugekiStudio.ViewModels"
+             x:Class="HarugekiStudio.App">
+
+  <!--
+    No RequestedThemeVariant: leaving it unset means the app inherits the
+    platform's light/dark preference and follows it live when the user changes it.
+  -->
+
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceInclude Source="avares://HarugekiStudio/Themes/Palette.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+
+      <vm:AssetKindBrushConverter x:Key="AssetKindBrush" />
+    </ResourceDictionary>
+  </Application.Resources>
+
   <Application.Styles>
     <FluentTheme />
-    <Style Selector="Menu">
-      <Setter Property="Background" Value="#2B2B2B" />
-    </Style>
-    <Style Selector="TabItem">
-      <Setter Property="FontSize" Value="12" />
-      <Setter Property="Padding" Value="10,4" />
-      <Setter Property="MinHeight" Value="26" />
-    </Style>
-    <Style Selector="TreeViewItem">
-      <Setter Property="MinHeight" Value="20" />
-    </Style>
+    <StyleInclude Source="avares://HarugekiStudio/Themes/Controls.axaml" />
   </Application.Styles>
-  <Application.Resources>
-    <vm:HighlightBrushConverter x:Key="HighlightBrushConverter" />
-    <vm:HighlightWeightConverter x:Key="HighlightWeightConverter" />
-  </Application.Resources>
+
 </Application>

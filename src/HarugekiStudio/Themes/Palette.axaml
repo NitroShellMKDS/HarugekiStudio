@@ -1,0 +1,143 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!--
+    App-specific design tokens only.
+
+    Everything structural — panel and toolbar backgrounds, text, borders, hover
+    and selection — comes straight from the Fluent theme's own `System*` resources
+    and is referenced at the point of use. That is what makes the window follow
+    the OS light/dark setting and the user's accent colour on every platform,
+    rather than repainting it from a palette of our own.
+
+    What lives here is the handful of things Fluent has no concept of: which
+    colour means "texture", what a keyframe tick looks like, how a search hit is
+    marked. Those are ours to define.
+  -->
+
+  <!--
+    Surfaces and text are ours; controls are Fluent's.
+
+    Fluent's own chrome ramp bottoms and tops out at pure black and pure white
+    (`SystemAltHighColor` is literally #000000 / #FFFFFF, `SystemBaseHighColor`
+    the inverse). Using those made the viewport a glaring white slab in light and
+    a dead black one in dark, with maximum-contrast text on top — hard to read
+    and tiring to sit in front of.
+
+    So the three surface levels and the three text weights below stop short of
+    both extremes: the lightest surface is #FAFAFA rather than white, the darkest
+    #1B1B1B rather than black, and body text is #1F1F1F / #E4E4E4. Everything
+    else — buttons, tabs, the tree, focus rings, and the selection highlight —
+    is still drawn by Fluent from the OS accent colour, so the app keeps
+    following the platform where it counts.
+
+    Contrast is checked, not eyeballed: primary text lands around 14:1 in light
+    and 12:1 in dark, and even the muted metadata clears 5:1, comfortably past
+    the 4.5:1 the small 11px labels need.
+  -->
+  <ResourceDictionary.ThemeDictionaries>
+
+    <ResourceDictionary x:Key="Light">
+      <!-- Elevation: content is the brightest "paper", chrome recedes behind it. -->
+      <SolidColorBrush x:Key="SurfaceWell" Color="#FAFAFA" />
+      <SolidColorBrush x:Key="SurfacePanel" Color="#EFEFEF" />
+      <SolidColorBrush x:Key="SurfaceRaised" Color="#E4E4E4" />
+      <SolidColorBrush x:Key="Divider" Color="#D2D2D2" />
+
+      <SolidColorBrush x:Key="TextPrimary" Color="#1F1F1F" />
+      <SolidColorBrush x:Key="TextSecondary" Color="#444444" />
+      <SolidColorBrush x:Key="TextMuted" Color="#626262" />
+
+      <SolidColorBrush x:Key="SearchHit" Color="#8A5300" />
+      <SolidColorBrush x:Key="ViewportGrid" Color="#C9C9C9" />
+    </ResourceDictionary>
+
+    <ResourceDictionary x:Key="Dark">
+      <!-- The same relationship inverted: content sits deepest, chrome lifts. -->
+      <SolidColorBrush x:Key="SurfaceWell" Color="#1B1B1B" />
+      <SolidColorBrush x:Key="SurfacePanel" Color="#242424" />
+      <SolidColorBrush x:Key="SurfaceRaised" Color="#2C2C2C" />
+      <SolidColorBrush x:Key="Divider" Color="#3A3A3A" />
+
+      <SolidColorBrush x:Key="TextPrimary" Color="#E4E4E4" />
+      <SolidColorBrush x:Key="TextSecondary" Color="#BDBDBD" />
+      <SolidColorBrush x:Key="TextMuted" Color="#999999" />
+
+      <SolidColorBrush x:Key="SearchHit" Color="#FFCF4D" />
+      <SolidColorBrush x:Key="ViewportGrid" Color="#454545" />
+    </ResourceDictionary>
+
+    <!-- Used when the platform reports no preference. -->
+    <ResourceDictionary x:Key="Default">
+      <SolidColorBrush x:Key="SurfaceWell" Color="#FAFAFA" />
+      <SolidColorBrush x:Key="SurfacePanel" Color="#EFEFEF" />
+      <SolidColorBrush x:Key="SurfaceRaised" Color="#E4E4E4" />
+      <SolidColorBrush x:Key="Divider" Color="#D2D2D2" />
+
+      <SolidColorBrush x:Key="TextPrimary" Color="#1F1F1F" />
+      <SolidColorBrush x:Key="TextSecondary" Color="#444444" />
+      <SolidColorBrush x:Key="TextMuted" Color="#626262" />
+
+      <SolidColorBrush x:Key="SearchHit" Color="#8A5300" />
+      <SolidColorBrush x:Key="ViewportGrid" Color="#C9C9C9" />
+    </ResourceDictionary>
+
+  </ResourceDictionary.ThemeDictionaries>
+
+  <!-- ==================== asset kinds ==================== -->
+  <!--
+    The Outliner's colour dots, and the only categorical palette in the app.
+
+    These are deliberately **the same in light and dark**. A categorical colour
+    has to stay recognisable as "that is a texture" regardless of the surface
+    behind it, so every hue sits at a middle luminance that carries against both
+    white and near-black. Retinting them per variant would make the same asset
+    kind read as two different colours depending on the OS setting, which is
+    exactly what a categorical scale must not do.
+
+    Hues are unchanged from earlier builds — model blue, texture amber, animation
+    violet, audio green — so the tree still reads at a glance.
+  -->
+  <SolidColorBrush x:Key="AssetModelBrush" Color="#2E90D9" />
+  <SolidColorBrush x:Key="AssetTextureBrush" Color="#D98E1F" />
+  <SolidColorBrush x:Key="AssetAnimationBrush" Color="#9268DE" />
+  <SolidColorBrush x:Key="AssetAudioBrush" Color="#2FA86F" />
+  <SolidColorBrush x:Key="AssetMeshBrush" Color="#6FA83C" />
+  <SolidColorBrush x:Key="AssetMaterialBrush" Color="#D9629A" />
+  <SolidColorBrush x:Key="AssetBoneBrush" Color="#8A93A3" />
+  <SolidColorBrush x:Key="AssetContainerBrush" Color="#7A8494" />
+  <SolidColorBrush x:Key="AssetUnknownBrush" Color="#9AA0AA" />
+
+  <!-- ==================== dope sheet ==================== -->
+  <!-- Mid-luminance for the same reason as the kind dots: the sheet is drawn over
+       whichever surface the theme supplies. -->
+  <SolidColorBrush x:Key="KeyframeBrush" Color="#E09B2D" />
+  <SolidColorBrush x:Key="PlayheadBrush" Color="#E5484D" />
+
+  <!-- ==================== metrics ==================== -->
+  <CornerRadius x:Key="RadiusSmall">4</CornerRadius>
+
+  <x:Double x:Key="RowHeight">22</x:Double>
+  <x:Double x:Key="ControlHeight">26</x:Double>
+
+  <!--
+    Thicknesses are separate tokens from the scalar spacings below: a Thickness
+    property will not accept a Double resource, and the mismatch only surfaces at
+    runtime as a cast failure.
+  -->
+  <Thickness x:Key="PanePadding">10,7</Thickness>
+  <Thickness x:Key="ToolbarPadding">8,5</Thickness>
+  <Thickness x:Key="StatusPadding">10,4</Thickness>
+  <Thickness x:Key="ContentMargin">12</Thickness>
+
+  <x:Double x:Key="SpaceS">6</x:Double>
+  <x:Double x:Key="SpaceM">8</x:Double>
+  <x:Double x:Key="SpaceL">12</x:Double>
+
+  <!-- ==================== type ==================== -->
+  <x:Double x:Key="FontSizeSmall">11</x:Double>
+  <x:Double x:Key="FontSizeBody">12</x:Double>
+  <x:Double x:Key="FontSizeHeading">13</x:Double>
+  <FontFamily x:Key="MonoFont">Consolas,Cascadia Mono,monospace</FontFamily>
+
+</ResourceDictionary>

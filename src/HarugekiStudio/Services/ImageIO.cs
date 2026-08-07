@@ -11,9 +11,9 @@ namespace HarugekiStudio.Services;
 /// stays free of any image dependency.
 ///
 /// The stored pixels are RGBA8 and Avalonia's universally supported layout is
-/// Bgra8888, so every conversion goes through <see cref="RingTexture.ToBgra"/>
-/// and its inverse. Alpha is kept unpremultiplied: premultiplying and dividing
-/// back is lossy, and it would silently corrupt any texture with real alpha.
+/// Bgra8888, so every conversion goes through <see cref="RingTexture.SwapRedBlue"/>,
+/// which serves both directions. Alpha is kept unpremultiplied: premultiplying and
+/// dividing back is lossy, and it would silently corrupt any texture with real alpha.
 /// </summary>
 public static class ImageIO
 {
@@ -67,6 +67,6 @@ public static class ImageIO
         {
             handle.Free();
         }
-        return RingTexture.FromBgra(bgra);
+        return RingTexture.SwapRedBlue(bgra);
     }
 }

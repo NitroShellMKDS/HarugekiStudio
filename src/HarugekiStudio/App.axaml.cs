@@ -23,6 +23,11 @@ public partial class App : Application
             vm.RequestClose += window.Close;
             window.DataContext = vm;
             desktop.MainWindow = window;
+
+            // The view model owns an OpenAL device and a dispatcher timer; shut
+            // them down deterministically instead of leaving them to a finalizer.
+            desktop.ShutdownRequested += (_, _) => vm.Dispose();
+
             foreach (string arg in desktop.Args ?? [])
             {
                 if (File.Exists(arg))

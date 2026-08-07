@@ -1,4 +1,6 @@
 using Harugeki.Formats;
+using Harugeki.Formats.Math;
+using Harugeki.Formats.Skinning;
 using System.Numerics;
 using System.Text;
 using System.Text.Json;
@@ -112,11 +114,11 @@ public static class GltfWriter
         Matrix4x4[] inverse = new Matrix4x4[bones.Count];
         for (int i = 0; i < bones.Count; i++)
         {
-            world[i] = FloatsToMatrix(bones[i].Bind);
+            world[i] = Transforms.ToMatrix(bones[i].Bind);
             // Derive the inverse so the skeleton is self-consistent: a few
             // weightless dynamic-bone anchors carry an unused second matrix
             // that is not the inverse of their bind matrix.
-            inverse[i] = Matrix4x4.Invert(world[i], out Matrix4x4 inv) ? inv : Matrix4x4.Identity;
+            inverse[i] = Transforms.InvertOrIdentity(world[i]);
         }
 
         int[] jointNodes = new int[bones.Count];
@@ -181,7 +183,7 @@ public static class GltfWriter
                 ["COLOR_0"] = Accessor(col, 4, Float),
             };
 
-            (ushort[]? joints, float[]? weights, bool skinned) = BuildSkin(model, mesh, slotOf);
+            (ushort[]? joints, float[]? weights, bool skinned) = BuildSkin(model, mesh);
             if (skinned && skin >= 0)
             {
                 attributes["JOINTS_0"] = Accessor(joints, 4, UShort);
@@ -308,83 +310,59 @@ public static class GltfWriter
         float[] ibm = new float[count * 16];
         for (int i = 0; i < count; i++)
         {
-            CopyMatrix(inverse[i], ibm, i * 16);
+            Transforms.CopyTo(inverse[i], ibm, i * 16);
         }
 
         return ibm;
     }
 
-    private static (ushort[] Joints, float[] Weights, bool Skinned) BuildSkin(
-        RingModel model, RingMesh mesh, Dictionary<int, int> slotOf)
+    /// <summary>
+    /// Expands the mesh's bone influences into the flat per-draw-vertex JOINTS_0 /
+    /// WEIGHTS_0 pair glTF wants. The influences come from <see cref="SkinBinding"/>,
+    /// the same resolver the viewport skins with, so an export and a preview can
+    /// never disagree about which bones move a vertex.
+    ///
+    /// <para>
+    /// A vertex with no influence is pinned to joint 0 at full weight rather than
+    /// left with all-zero weights, which glTF leaves undefined.
+    /// </para>
+    /// </summary>
+    private static (ushort[] Joints, float[] Weights, bool Skinned) BuildSkin(RingModel model, RingMesh mesh)
     {
-        int skinVerts = mesh.SkinPositions.Length / 3;
-        List<(float W, int J)>[] lists = new List<(float W, int J)>[skinVerts];
-        bool any = false;
-
-        for (int b = 0; b < model.Bones.Count; b++)
-        {
-            RingBone bone = model.Bones[b];
-            if (bone.MeshIndex != mesh.NodeIndex)
-            {
-                continue;
-            }
-
-            for (int k = 0; k < bone.Weights.Length; k++)
-            {
-                int v = bone.WeightVertices[k];
-                float w = bone.Weights[k];
-                if (v >= skinVerts || w == 0f)
-                {
-                    continue;
-                }
-
-                (lists[v] ??= []).Add((w, b));
-                any = true;
-            }
-        }
-        if (!any)
+        SkinBinding? binding = SkinBinding.Build(model, mesh);
+        if (binding is null)
         {
             return ([], [], false);
         }
 
         int n = mesh.VertexCount;
-        ushort[] joints = new ushort[n * 4];
-        float[] weights = new float[n * 4];
+        ushort[] joints = new ushort[n * SkinBinding.MaxInfluences];
+        float[] weights = new float[n * SkinBinding.MaxInfluences];
+
         for (int i = 0; i < n; i++)
         {
-            List<(float W, int J)>? list = lists[mesh.VertexIds[i]];
-            if (list is null) { weights[i * 4] = 1f; continue; }
-            (float W, int J)[] top = list.OrderByDescending(x => x.W).Take(4).ToArray();
-            for (int k = 0; k < top.Length; k++)
+            int at = i * SkinBinding.MaxInfluences;
+            if (!binding.TryGetInfluences(mesh.VertexIds[i], out ReadOnlySpan<int> js, out ReadOnlySpan<float> ws))
             {
-                joints[(i * 4) + k] = (ushort)top[k].J;
-                weights[(i * 4) + k] = top[k].W;
+                weights[at] = 1f;
+                continue;
+            }
+
+            for (int k = 0; k < SkinBinding.MaxInfluences; k++)
+            {
+                joints[at + k] = (ushort)js[k];
+                weights[at + k] = ws[k];
             }
         }
-        return (joints, weights, true);
-    }
 
-    /// <summary>Converts a row-major float[16] to Matrix4x4.</summary>
-    private static Matrix4x4 FloatsToMatrix(float[] m)
-    {
-        return new(
-        m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7],
-        m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]);
+        return (joints, weights, true);
     }
 
     private static JsonArray MatrixArray(Matrix4x4 m)
     {
         float[] f = new float[16];
-        CopyMatrix(m, f, 0);
+        Transforms.CopyTo(m, f);
         return new JsonArray([.. f.Select(x => JsonValue.Create(x))]);
-    }
-
-    private static void CopyMatrix(Matrix4x4 m, float[] dst, int at)
-    {
-        dst[at] = m.M11; dst[at + 1] = m.M12; dst[at + 2] = m.M13; dst[at + 3] = m.M14;
-        dst[at + 4] = m.M21; dst[at + 5] = m.M22; dst[at + 6] = m.M23; dst[at + 7] = m.M24;
-        dst[at + 8] = m.M31; dst[at + 9] = m.M32; dst[at + 10] = m.M33; dst[at + 11] = m.M34;
-        dst[at + 12] = m.M41; dst[at + 13] = m.M42; dst[at + 14] = m.M43; dst[at + 15] = m.M44;
     }
 
     internal static string SafeName(string name)

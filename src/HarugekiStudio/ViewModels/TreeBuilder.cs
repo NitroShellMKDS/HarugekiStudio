@@ -15,7 +15,7 @@ public static class TreeBuilder
         };
     }
 
-    private static IEnumerable<TreeItemViewModel> ForNodeChildren(RingNode node)
+    private static List<TreeItemViewModel> ForNodeChildren(RingNode node)
     {
         List<TreeItemViewModel> list = [];
         for (int i = 0; i < node.Children.Count; i++)
